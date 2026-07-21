@@ -7,7 +7,9 @@ hard-realtime embedded systems (used by NASA Langley for UAS flight monitoring).
 mutually-recursive infinite streams; the compiler emits a monitor that runs in **constant time and
 constant memory**, and the spec itself is **verifiable** by SMT.
 
-This repo starts empty — everything below is new code.
+**Status: M0 complete.** See the milestone table below. This document is the plan; decisions taken
+along the way — and the reasons for them — are recorded in [docs/deviations.md](docs/deviations.md),
+which is the living record. Where a sketch below disagrees with the code, the code is right.
 
 The goal is a Rust implementation preserving the three design objectives, not a transliteration.
 Two places where Rust is genuinely better than the Haskell original, and one where it is worse:
@@ -135,20 +137,26 @@ Core passes, all in `copilot-core` so every backend and the verifier share them:
   buffers; no zero-length arrays or empty structs (upstream rejects both); no `Exists` reaching a
   backend.
 - `resources(&Spec) -> Footprint`, `cost(&Spec) -> OpCounts`.
-- `order(&Spec) -> Vec<StreamId>` — not a dependency topo-sort (streams are mutually recursive by
-  design); an evaluation order for the *temporaries* phase.
+- `reachable(&Spec, roots) -> Vec<ExprId>` — the set of expressions evaluated per step, backing
+  `cost`. (Replaces the `order()` this plan originally called for: `Drop` reads only *committed*
+  state, so no stream's transition expression depends on another's within a step, and phase 3 has no
+  ordering constraint to compute.)
 
-### Two semantic decisions to make now, because all three layers must agree
+### Semantic decisions all three layers must agree on
 
-1. **Integer overflow = wrapping.** Upstream C99 inherits C's implementation-defined/UB behaviour.
-   We define it: IR arithmetic is wrapping, the interpreter wraps, codegen emits `wrapping_add` etc.,
-   SMT models it with `BitVec`. Total, panic-free, identical in debug and release. Record in
-   `docs/deviations.md`.
-2. **Array index policy.** `Index` takes a runtime `Word32`. Codegen flag
-   `IndexPolicy::{ Wrap, Saturate, Assume }`, default `Wrap` (`a[(i as usize) % N]`) — constant time,
-   no panic, no UB. `Assume` emits a Kani `assume(i < N)` plus a bounds-checked get, for users who
-   want the obligation surfaced as a proof goal instead. Interpreter and SMT lowering follow the
-   same flag.
+1. **Integer overflow = wrapping.** *Decided and recorded (M0).* Upstream C99 inherits C's
+   implementation-defined/UB behaviour. We define it: IR arithmetic is wrapping, the interpreter
+   wraps, codegen emits `wrapping_add` etc., SMT models it with `BitVec`. Total, panic-free,
+   identical in debug and release.
+2. **Array index policy.** *Decided, not yet implemented — lands with M1/M2.* `Index` takes a
+   runtime `Word32`. Codegen flag `IndexPolicy::{ Wrap, Saturate, Assume }`, default `Wrap`
+   (`a[(i as usize) % N]`) — constant time, no panic, no UB. `Assume` emits a Kani `assume(i < N)`
+   plus a bounds-checked get, for users who want the obligation surfaced as a proof goal instead.
+   Interpreter and SMT lowering follow the same flag.
+3. **Equality is scalar-only.** *Decided and implemented (M0).* Upstream allows `==` on any `Eq`
+   instance including arrays and structs; we reject aggregates, because comparing one compiles to a
+   fully-unrolled element-wise walk and M5's proof depends on `step()` staying small. Constrains M3
+   (voting compares elements, not whole arrays). Cheap to relax; expensive to discover in M5.
 
 ---
 
@@ -206,13 +214,24 @@ monitor is dependency-injected and testable:
 pub trait Env      { fn temperature(&mut self) -> f32; }
 pub trait Triggers { fn heaton(&mut self, a0: f32); fn heatoff(&mut self, a0: f32); }
 
-pub struct Monitor { s0: [u64; 1], s0_idx: usize, s1: [u64; 2], s1_idx: usize }
+#[repr(C)]                                       // required; see below
+pub struct Monitor { s0: [u64; 1], s1: [u64; 2], s1_idx: u32 }
 
 impl Monitor {
     pub const fn new() -> Self { /* buffers from Stream::buffer */ }
     pub fn step<E: Env, T: Triggers>(&mut self, env: &mut E, tr: &mut T) { .. }
 }
 ```
+
+The state layout is a contract with `copilot_core::resources`, which M0 already computes and tests
+against a hand-written struct — so M2 must match it, not the other way round:
+
+- `#[repr(C)]`, fields in stream order, buffer then index. `repr(Rust)` may reorder fields, which
+  would make the reported footprint unfalsifiable.
+- Indices are `u32` (`copilot_core::INDEX_BYTES`), not `usize`, so a footprint does not depend on the
+  target's pointer width.
+- A stream buffering one value carries **no** index — it is always read and written at slot 0. Note
+  `s0` above.
 
 `step()` is strictly four phases, and the phase split is the semantic crux the bisimulation proof
 asserts:
@@ -325,18 +344,29 @@ across `--harness` invocations.
 
 ## Milestones
 
-| # | Deliverable | Done when |
-|---|---|---|
-| M0 | Workspace, `copilot-core` IR, typechecker, `wellformed`, `resources`, `cost` | Hand-built `Spec` typechecks; footprint test passes |
-| M1 | `copilot-lang` builder, `copilot-interp`, heater example | Heater spec runs in the interpreter, matches hand-computed trace |
-| M2 | `copilot-rust` backend, `#[derive(CopilotStruct)]`, arrays, layer-1 testing | `proptest` differential green; `size_of::<Monitor>()` matches `resources()` |
-| M3 | `copilot-libs` (PTLTL, LTL, MTL, clocks, voting, FSM) | Upstream tutorial examples reproduce |
-| M4 | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
-| M5 | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on heater + fib; a deliberately broken codegen (phases 3/4 swapped) is caught |
-| M6 | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
-| M7 | `copilot-bluespec` | `bsc` compiles output; bluesim trace matches interpreter |
+| # | Status | Deliverable | Done when |
+|---|---|---|---|
+| M0 | **done** | Workspace, `copilot-core` IR, typechecker, `wellformed`, `resources`, `cost` | Hand-built `Spec` typechecks; footprint test passes |
+| M1 | next | `copilot-lang` builder, `copilot-interp`, heater example | Heater spec runs in the interpreter, matches hand-computed trace |
+| M2 | | `copilot-rust` backend, `#[derive(CopilotStruct)]`, arrays, layer-1 testing | `proptest` differential green; `size_of::<Monitor>()` matches `resources()` |
+| M3 | | `copilot-libs` (PTLTL, LTL, MTL, clocks, voting, FSM) | Upstream tutorial examples reproduce |
+| M4 | | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
+| M5 | | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on heater + fib; a deliberately broken codegen (phases 3/4 swapped) is caught |
+| M6 | | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
+| M7 | | `copilot-bluespec` | `bsc` compiles output; bluesim trace matches interpreter |
 
 M0–M2 is the load-bearing core; M3–M7 are independently shippable and can be reordered.
+
+Carried out of M0, to do before the milestone that depends on it:
+
+- **Operator typing rules are thinly tested** — ~8 error paths covered out of ~50 operators. The M1
+  proptest generator exercises them by construction, which is the right place for it.
+- **`Error::TypeDrift` and `Error::NonMonotonicArena` have no tests**, because the arena's fields are
+  private and an integration test cannot build a corrupted one. Needs in-crate unit tests before M5,
+  since the verifier's soundness rests on `typecheck` catching exactly these.
+- **`docs/semantics.md` is unwritten.** The ring-buffer invariant and four-phase step order live in
+  the `copilot-core` crate docs for now; promote them to a standalone document in M1, when the
+  interpreter makes them executable rather than aspirational.
 
 ---
 
