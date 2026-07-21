@@ -1,0 +1,16 @@
+[package]
+name = "copilot-core"
+description = "Core IR for copilot-rs: types, expressions, specifications, and static analyses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# copilot-core deliberately has no dependencies. Everything downstream --- the
+# backends and the verifier --- trusts this crate's typechecker, so its surface
+# is kept small enough to audit.
+[dependencies]
+
+[lints]
+workspace = true
