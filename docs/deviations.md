@@ -303,3 +303,53 @@ are written in upstream as lazy definitions where the base case never forces the
 Rust evaluates arguments first, so a direct transliteration builds one shift too many — an error
 outright on an external variable, and for the past-time metric operators a buffered stream the
 monitor would carry and never read. `copilot_libs::mtl` guards each step explicitly.
+
+## 17. The SMT encoding uses a shifting window, not the ring buffer
+
+**Implemented** (M4, `copilot-theorem`).
+
+The interpreter and both code generators store a stream as a ring buffer with a rotating index. The
+SMT encoding stores it as a window of `n` state variables holding the stream's values at
+`t ..= t + n - 1`, and a step shifts that window along.
+
+Both denote the same stream. The window needs no modular index arithmetic, which keeps the encoding
+in a decidable fragment and stops the prover reasoning about an implementation detail — but the more
+important reason is that it makes the encoding an *independent* derivation of the semantics rather
+than a transcription of an existing engine. A prover that shared its meaning with the thing it
+checks would agree with it by construction, including where both are wrong.
+
+That independence is what
+`the_encoding_agrees_with_the_interpreter` in `crates/copilot-theorem/tests/encoding.rs` exploits:
+random specifications run through both, and any disagreement is a real bug in one of them.
+
+## 18. Results carry caveats, and a caveated result is not a proof
+
+**Implemented** (M4, `copilot_theorem::Caveat`).
+
+Upstream reports a property as proved, disproved, or unknown. copilot-rs adds a fourth thing to the
+answer: what was approximated to reach it.
+
+- Floats encoded as reals — the default — have no NaN, no infinity, no overflow and no rounding, so
+  a property can hold under them and fail on a real machine.
+- Transcendental functions and conversions between integers and floats become uninterpreted
+  functions. That is sound for *proving* (a property true of every interpretation is true of the
+  real one) and unsound for *refuting*.
+
+Rather than burying this in documentation, every `Proof` carries the caveats that applied and
+`Proof::is_conclusive` is false whenever any did. A caller that ignores caveats cannot accidentally
+treat an approximation as a guarantee — which is the failure mode that matters for a verification
+tool.
+
+`FloatEncoding::Ieee` selects the exact encoding, at a large cost in solving time.
+
+## 19. Induction depth is searched, not fixed
+
+**Implemented** (M4).
+
+Upstream picks `k` as the maximum buffer depth in the specification and answers at that depth.
+
+copilot-rs searches depths upwards instead, because the heuristic is wrong in both directions. A
+counterexample that takes more steps to arrive than the deepest buffer is missed entirely — the base
+case never unrolls far enough to see it — and a property that becomes inductive one step later is
+reported as "not inductive" when it is simply true. `Settings::depth` fixes the depth when that is
+what is wanted; `Settings::max_depth` bounds the search.

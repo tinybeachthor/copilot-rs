@@ -49,6 +49,15 @@ name = "copilot-core"
 version = "0.1.0"
 
 [[package]]
+name = "copilot-gen"
+version = "0.1.0"
+dependencies = [
+ "copilot-core",
+ "copilot-interp",
+ "copilot-lang",
+]
+
+[[package]]
 name = "copilot-interp"
 version = "0.1.0"
 dependencies = [
@@ -87,6 +96,18 @@ name = "copilot-rust"
 version = "0.1.0"
 dependencies = [
  "copilot-core",
+ "copilot-interp",
+ "copilot-lang",
+ "copilot-libs",
+ "proptest",
+]
+
+[[package]]
+name = "copilot-theorem"
+version = "0.1.0"
+dependencies = [
+ "copilot-core",
+ "copilot-gen",
  "copilot-interp",
  "copilot-lang",
  "copilot-libs",
