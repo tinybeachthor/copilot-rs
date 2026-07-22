@@ -359,20 +359,14 @@ M0–M2 is the load-bearing core; M3–M7 are independently shippable and can be
 
 Carried forward, to do before the milestone that depends on it:
 
-- **Random specification generation now exists** (`copilot-gen`, M4) and validates the SMT encoding
-  against the interpreter. It is not yet wired into `copilot-rust`: doing so needs a `rustc` harness
-  to compile generated monitors at test time, which the checked-in golden corpus currently stands in
-  for.
-- **`Error::TypeDrift` and `Error::NonMonotonicArena` have no tests**, because the arena's fields are
-  private and an integration test cannot build a corrupted one. Needs in-crate unit tests before M5,
-  since the verifier's soundness rests on `typecheck` catching exactly these.
-- **`Local` nodes are erased by the Rust backend**, by substituting each variable with its
-  definition. Correct for a pure language, and the frontend never emits `Local` today — but if M6's
-  macro does, a binding reachable only through an unused `Local` would produce an unused-variable
-  warning in generated code.
-- **`libm` and `std` differ on transcendentals**, so the differential tests point both engines at one
-  implementation and therefore check lowering rather than numerics. Closing that gap properly is
-  M4's job: the SMT encoding is the arbiter, not either implementation.
+- *(nothing outstanding — the four items carried since M0 were cleared after M4)*
+
+Cleared: random specification generation now feeds both the SMT encoding (`copilot-theorem`) and a
+`rustc` harness that compiles generated monitors and compares them against the interpreter
+(`crates/copilot-rust/tests/random_specs.rs`); `Error::TypeDrift` and `Error::NonMonotonicArena` have
+in-crate corruption tests, which M5's soundness argument rests on; `Local` erasure is exercised by a
+corpus entry and no longer warns; and the `libm`/`std` split is gone, since the interpreter now uses
+`libm` too.
 
 ---
 

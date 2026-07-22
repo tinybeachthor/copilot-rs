@@ -12,7 +12,7 @@
 
 use crate::render;
 use copilot_core::{ExprId, IndexPolicy, Node, Op1, Op2, Op3, Spec, StreamId, Type, VarId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Names the binding holding an expression's value.
 pub fn binding(id: ExprId) -> String {
@@ -53,6 +53,14 @@ pub struct Lowering<'a> {
     /// that uses it, which the flat arena order cannot express — a `Var` node
     /// is interned before the `Local` that binds it.
     var_bindings: HashMap<VarId, ExprId>,
+    /// Bindings some emitted expression actually reads.
+    ///
+    /// Not the same as the arena's child relation. `Local` is erased by
+    /// substitution, so a `Local` node emits only its body and its *bound*
+    /// expression is read only where a `Var` refers to it. A binding reachable
+    /// solely as the bound side of a `Local` nobody uses is therefore emitted
+    /// and never read.
+    referenced: HashSet<ExprId>,
 }
 
 impl<'a> Lowering<'a> {
@@ -64,11 +72,62 @@ impl<'a> Lowering<'a> {
                 var_bindings.insert(*var, *bound);
             }
         }
-        Lowering {
+        let mut lowering = Lowering {
             spec,
             index_policy,
             math,
             var_bindings,
+            referenced: HashSet::new(),
+        };
+        lowering.referenced = lowering.collect_referenced();
+        lowering
+    }
+
+    /// Every binding the emitted code reads, from any root or any other node.
+    fn collect_referenced(&self) -> HashSet<ExprId> {
+        let mut referenced: HashSet<ExprId> = self.spec.runtime_roots().into_iter().collect();
+        for id in copilot_core::reachable(self.spec, &self.spec.runtime_roots()) {
+            match self.spec.arena.node(id) {
+                Node::Var(var) => {
+                    if let Some(bound) = self.var_bindings.get(var) {
+                        referenced.insert(*bound);
+                    }
+                }
+                // Erased: only the body is emitted, so only the body is read.
+                Node::Local { body, .. } => {
+                    referenced.insert(*body);
+                }
+                Node::Label(_, a) => {
+                    referenced.insert(*a);
+                }
+                Node::Op1(_, a) => {
+                    referenced.insert(*a);
+                }
+                Node::Op2(_, a, b) => {
+                    referenced.insert(*a);
+                    referenced.insert(*b);
+                }
+                Node::Op3(_, a, b, c) => {
+                    referenced.insert(*a);
+                    referenced.insert(*b);
+                    referenced.insert(*c);
+                }
+                Node::Const { .. } | Node::Drop { .. } | Node::ExternVar { .. } => {}
+            }
+        }
+        referenced
+    }
+
+    /// The name to declare a binding under.
+    ///
+    /// Underscored when nothing reads it, so that generated code stays
+    /// warning-free in the user's own build without an `allow` telling their
+    /// compiler to be quiet.
+    pub fn declaration(&self, id: ExprId) -> String {
+        if self.referenced.contains(&id) {
+            binding(id)
+        } else {
+            format!("_{}", binding(id))
         }
     }
 

@@ -9,8 +9,12 @@ repository.workspace = true
 
 [dependencies]
 copilot-core = { path = "../copilot-core", version = "0.1.0" }
+# The same maths library generated monitors call, so the reference implementation
+# computes exactly what the code it is the reference for computes.
+libm = "0.2"
 
 [dev-dependencies]
+libm = "0.2"
 copilot-lang = { path = "../copilot-lang", version = "0.1.0" }
 
 [lints]

@@ -335,6 +335,49 @@ pub fn library() -> Spec {
     b.finish().unwrap()
 }
 
+/// A specification containing a `Local` binding whose body ignores it.
+///
+/// The typed frontend never produces `Local` — hash-consing already shares
+/// equal subexpressions — but the IR has it, and a macro frontend or an
+/// optimisation pass could. It is built here directly on the arena, which is
+/// the same door those would come through.
+///
+/// The awkward shape is deliberate: the bound expression is reachable, because
+/// the `Local` node names it as a child, yet nothing refers to the variable. A
+/// generator that bound every reachable node unconditionally would emit a
+/// binding no one reads, and warn in the user's own build.
+pub fn locals() -> Spec {
+    use copilot_core::{Arena, Op2, Type, Typed};
+
+    let mut arena = Arena::new();
+    let id = arena.declare_stream(Type::Word32, 1).unwrap();
+    let current = arena.drop_(0, id).unwrap();
+    let one = arena.constant(Type::Word32, 1u32.lift()).unwrap();
+
+    // let v = current + 1 in (current + 1) -- the variable is used.
+    let used_bound = arena.op2(Op2::Add(Type::Word32), current, one).unwrap();
+    let used_var = arena.declare_local(Type::Word32);
+    let reference = arena.var(used_var).unwrap();
+    let used = arena.local(used_var, used_bound, reference).unwrap();
+
+    // let w = current * 7 in 0 -- the variable is not used, so the binding is
+    // reachable but nothing reads it.
+    let seven = arena.constant(Type::Word32, 7u32.lift()).unwrap();
+    let ignored_bound = arena.op2(Op2::Mul(Type::Word32), current, seven).unwrap();
+    let ignored_var = arena.declare_local(Type::Word32);
+    let zero = arena.constant(Type::Word32, 0u32.lift()).unwrap();
+    let ignored = arena.local(ignored_var, ignored_bound, zero).unwrap();
+
+    let next = arena.op2(Op2::Add(Type::Word32), used, ignored).unwrap();
+
+    let mut spec = Spec::new(arena);
+    spec.define_stream(id, vec![copilot_core::Value::Word32(0)], next)
+        .unwrap();
+    spec.observe("counter", current).unwrap();
+    spec.validate().unwrap();
+    spec
+}
+
 /// Every corpus entry, by name.
 pub fn all() -> Vec<(&'static str, Spec)> {
     vec![
@@ -348,5 +391,6 @@ pub fn all() -> Vec<(&'static str, Spec)> {
         ("structs", structs()),
         ("operators", operators()),
         ("library", library()),
+        ("locals", locals()),
     ]
 }

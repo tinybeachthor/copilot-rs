@@ -353,3 +353,42 @@ counterexample that takes more steps to arrive than the deepest buffer is missed
 case never unrolls far enough to see it — and a property that becomes inductive one step later is
 reported as "not inductive" when it is simply true. `Settings::depth` fixes the depth when that is
 what is wanted; `Settings::max_depth` bounds the search.
+
+## 20. The interpreter's transcendentals come from `libm`, not the host
+
+**Implemented** (M4 follow-up, `copilot-interp`).
+
+`sqrt`, `exp`, `sin` and the rest are computed with the [`libm`](https://crates.io/crates/libm)
+crate rather than the standard library.
+
+The interpreter is the reference every other engine is compared against, and generated `no_std`
+monitors call `libm` because `core` provides none of these. An interpreter calling the platform's
+maths library would therefore disagree with the code it is the reference for — in the last place,
+on exactly the operations hardest to reason about — and would disagree *differently* on different
+machines. Routing both through one library removes the discrepancy instead of documenting it.
+
+This closes a gap M2 could only work around. The code-generation differential tests previously
+pointed generated code at a shim forwarding to `std`, which meant they checked that the right
+function was called with the right arguments but not that the numbers matched. They now link the
+real `libm` on both sides and compare values.
+
+`sqrt`, `ceil` and `floor` are exactly rounded and agree between any two implementations; the
+transcendentals are not, which is why the choice had to be made rather than left open.
+`transcendentals_follow_libm_rather_than_the_host` in `crates/copilot-interp/tests/semantics.rs`
+pins it with an argument where the two libraries genuinely differ.
+
+## 21. Every declared external variable is sampled, read or not
+
+**Implemented** (M2 codegen; made explicit by M4's random specifications).
+
+A specification can declare an external variable that no reachable expression reads. Generated code
+still calls its `Env` method once per step, and binds the result to a name nothing looks at.
+
+`Env` is the user's own code, and a read may well have an effect — clearing a status register,
+advancing a queue, acknowledging an interrupt. "Each method is called exactly once per step" is a
+contract the monitor's environment can rely on, and skipping the unread ones to save a call would
+break it silently. The binding is underscored instead, so generated code still compiles clean.
+
+The same reasoning applies to `Local` bindings the Rust backend erases: a binding reachable only as
+the bound side of an unused `Local` is emitted and never read, and is underscored rather than
+suppressed with an `allow`.

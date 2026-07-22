@@ -10,7 +10,7 @@
 //! this test binary, so the whole suite runs on every commit without a `rustc`
 //! subprocess. `proptest` supplies the inputs; the specifications themselves are
 //! hand-written, chosen to cover what a code generator can get wrong that a type
-//! checker would not catch.
+//! checker would not catch. See `random_specs.rs` for generated ones.
 
 mod support;
 
@@ -19,78 +19,16 @@ use copilot_interp::Samples;
 use proptest::prelude::*;
 use support::{Event, Recorder, interpret, no_samples};
 
-/// Routes the transcendentals to the standard library.
-///
-/// Generated monitors call `libm` because `core` has no `sqrt`. The real `libm`
-/// and `std` agree bit for bit on the exactly-rounded operations — `sqrt`,
-/// `ceil`, `floor` — but not on the transcendentals, where they may differ in
-/// the last place. Pointing both engines at one implementation keeps this test
-/// about the code generator rather than about two libms.
-///
-/// The consequence is that this test checks transcendental *lowering* — that
-/// the right function is called with the right arguments in the right order —
-/// and not that `libm` matches `std` numerically. It does not, and
-/// `docs/semantics.md` says so.
-#[allow(dead_code)]
-mod libm {
-    pub fn sqrt(x: f64) -> f64 {
-        x.sqrt()
-    }
-    pub fn floor(x: f64) -> f64 {
-        x.floor()
-    }
-    pub fn ceil(x: f64) -> f64 {
-        x.ceil()
-    }
-    pub fn sin(x: f64) -> f64 {
-        x.sin()
-    }
-    pub fn exp(x: f64) -> f64 {
-        x.exp()
-    }
-    pub fn log(x: f64) -> f64 {
-        x.ln()
-    }
-    pub fn pow(x: f64, y: f64) -> f64 {
-        x.powf(y)
-    }
-    pub fn atan2(y: f64, x: f64) -> f64 {
-        y.atan2(x)
-    }
-
-    // The `f` suffix is `libm`'s convention for the single-precision entry
-    // points, which is what the generator emits for `Type::Float`.
-    pub fn sqrtf(x: f32) -> f32 {
-        x.sqrt()
-    }
-    pub fn floorf(x: f32) -> f32 {
-        x.floor()
-    }
-    pub fn ceilf(x: f32) -> f32 {
-        x.ceil()
-    }
-    pub fn sinf(x: f32) -> f32 {
-        x.sin()
-    }
-    pub fn expf(x: f32) -> f32 {
-        x.exp()
-    }
-    pub fn logf(x: f32) -> f32 {
-        x.ln()
-    }
-    pub fn powf(x: f32, y: f32) -> f32 {
-        x.powf(y)
-    }
-    pub fn atan2f(y: f32, x: f32) -> f32 {
-        y.atan2(x)
-    }
-}
+// Generated monitors call `libm`, and so does the interpreter, so the real
+// crate is used here rather than a shim forwarding to `std`. That makes this a
+// comparison of numbers rather than only of which function was called: `libm`
+// and the host's maths library differ in the last place on the
+// transcendentals, and a shim would have hidden any disagreement that mattered.
 
 macro_rules! generated {
     ($module:ident, $file:literal) => {
-        #[allow(unused_imports, dead_code)]
+        #[allow(dead_code)]
         mod $module {
-            use super::libm;
             include!($file);
         }
     };

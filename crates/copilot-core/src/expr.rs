@@ -388,3 +388,23 @@ impl Arena {
         id
     }
 }
+
+/// Deliberate corruption, for testing that validation actually catches it.
+///
+/// The arena's invariants hold by construction, so the only way to check that
+/// [`crate::typecheck`] enforces them is to break one on purpose. That needs
+/// access to fields no caller outside this module has — which is the point:
+/// nothing but a test can reach them.
+#[cfg(test)]
+impl Arena {
+    /// Replaces a node's cached type without recomputing anything.
+    pub(crate) fn corrupt_cached_type(&mut self, id: ExprId, ty: Type) {
+        self.types[id.index()] = ty;
+    }
+
+    /// Puts a node at a position earlier than one of its children.
+    pub(crate) fn corrupt_order(&mut self, a: ExprId, b: ExprId) {
+        self.nodes.swap(a.index(), b.index());
+        self.types.swap(a.index(), b.index());
+    }
+}

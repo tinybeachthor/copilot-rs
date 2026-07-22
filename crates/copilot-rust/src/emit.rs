@@ -257,11 +257,22 @@ fn write_step(out: &mut String, spec: &Spec, settings: &Settings) {
             out,
             "        // Phase 1: sample each external variable exactly once."
         );
+        // Every declared variable is sampled, including one no expression
+        // reads. `Env` is the user's code and a read may well have an effect —
+        // clearing a status register, advancing a queue — so "called exactly
+        // once per step" has to hold for all of them or it is not a contract.
+        // The unread ones are simply bound to a name nothing looks at.
+        let read = externs_read(spec);
         for (name, ty) in spec.arena.externs() {
+            let binding = expr::sample(name);
+            let binding = if read.contains(name.as_str()) {
+                binding
+            } else {
+                format!("_{binding}")
+            };
             let _ = writeln!(
                 out,
-                "        let {}: {} = env.{name}();",
-                expr::sample(name),
+                "        let {binding}: {} = env.{name}();",
                 render::ty(ty)
             );
         }
@@ -292,7 +303,7 @@ fn write_step(out: &mut String, spec: &Spec, settings: &Settings) {
         let _ = writeln!(
             out,
             "        let {}: {} = {};",
-            expr::binding(id),
+            lowering.declaration(id),
             render::ty(ty),
             lowering.node(id)
         );
@@ -359,6 +370,17 @@ fn write_step(out: &mut String, spec: &Spec, settings: &Settings) {
 
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out, "}}");
+}
+
+/// The external variables some reachable expression actually reads.
+fn externs_read(spec: &Spec) -> std::collections::BTreeSet<&str> {
+    copilot_core::reachable(spec, &spec.runtime_roots())
+        .into_iter()
+        .filter_map(|id| match spec.arena.node(id) {
+            copilot_core::Node::ExternVar { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 
 type Structs = BTreeMap<String, StructType>;

@@ -300,3 +300,88 @@ fn check_ident(kind: &'static str, name: &str) -> Result<()> {
         })
     }
 }
+
+#[cfg(test)]
+mod corruption {
+    //! What validation catches once the arena's invariants are broken.
+    //!
+    //! Both invariants hold by construction, so these cannot be written as
+    //! integration tests: the arena's fields are private, and its constructors
+    //! refuse to produce anything invalid. They live here because the verifier's
+    //! soundness rests on `typecheck` noticing exactly these two things about
+    //! IR it did not build — deserialized, macro-generated, or rewritten by an
+    //! optimisation pass.
+
+    use crate::{Arena, ExprId, Op2, Spec, Type, Typed, Value};
+
+    /// `counter = [0] ++ (counter + 1)`, the smallest spec with an operator.
+    fn counter() -> Spec {
+        let mut arena = Arena::new();
+        let id = arena.declare_stream(Type::Word64, 1).unwrap();
+        let current = arena.drop_(0, id).unwrap();
+        let one = arena.constant(Type::Word64, 1u64.lift()).unwrap();
+        let next = arena.op2(Op2::Add(Type::Word64), current, one).unwrap();
+
+        let mut spec = Spec::new(arena);
+        spec.define_stream(id, vec![Value::Word64(0)], next)
+            .unwrap();
+        spec.observe("counter", current).unwrap();
+        spec
+    }
+
+    #[test]
+    fn a_cached_type_that_no_longer_matches_is_caught() {
+        let mut spec = counter();
+        spec.validate()
+            .expect("the spec is valid before corruption");
+
+        // Claim the constant `1u64` is an `Int8`. Nothing else changes, so only
+        // a pass that re-derives types from scratch can notice.
+        spec.arena.corrupt_cached_type(ExprId(1), Type::Int8);
+
+        assert!(
+            matches!(
+                crate::typecheck(&spec),
+                Err(crate::Error::TypeDrift {
+                    expr: ExprId(1),
+                    ..
+                })
+            ),
+            "typecheck must re-derive types rather than trust the cache"
+        );
+    }
+
+    #[test]
+    fn a_node_placed_before_its_child_is_caught() {
+        let mut spec = counter();
+        spec.validate()
+            .expect("the spec is valid before corruption");
+
+        // Move the addition ahead of the operands it reads. Analyses rely on a
+        // node's children having smaller IDs so that one forward pass suffices;
+        // without this check they would silently read uninitialised entries.
+        spec.arena.corrupt_order(ExprId(0), ExprId(2));
+
+        assert!(
+            matches!(
+                crate::typecheck(&spec),
+                Err(crate::Error::NonMonotonicArena { .. })
+            ),
+            "typecheck must verify the ordering its own single pass depends on"
+        );
+    }
+
+    /// The monotonicity check has to run before types are recomputed.
+    ///
+    /// Recomputing a node's type reads its children's already-computed types by
+    /// index. A node placed before its child would index past what has been
+    /// filled in, so catching the ordering second would mean panicking first.
+    #[test]
+    fn the_ordering_check_runs_before_any_type_is_recomputed() {
+        let mut spec = counter();
+        spec.arena.corrupt_order(ExprId(0), ExprId(2));
+
+        // The point is that this returns rather than panics.
+        assert!(crate::typecheck(&spec).is_err());
+    }
+}

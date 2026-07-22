@@ -204,16 +204,15 @@ mod floats {
     /// Single-precision operations must be evaluated in single precision.
     ///
     /// `+`, `-`, `*` and `/` would survive a detour through `f64`, but the
-    /// transcendentals do not: this argument is one of the roughly one in two
-    /// thousand where `(x as f64).exp() as f32` differs from `x.exp()` in the
-    /// last bit. Asserting against the host's own `f32` operation is what
-    /// catches a regression to computing at the wrong width.
+    /// transcendentals do not: this argument is one where narrowing the
+    /// double-precision result differs from computing at single precision in
+    /// the last bit.
     #[test]
     fn f32_operations_are_evaluated_at_f32() {
-        let x = -38.997597f32;
+        let x = -0.99448436f32;
         assert_ne!(
-            x.exp().to_bits(),
-            ((x as f64).exp() as f32).to_bits(),
+            libm::expf(x).to_bits(),
+            (libm::exp(x as f64) as f32).to_bits(),
             "chosen argument no longer distinguishes the two evaluation widths"
         );
 
@@ -223,7 +222,32 @@ mod floats {
 
         let mut monitor = Monitor::new(&spec).unwrap();
         let observed = monitor.step(&mut Samples::none()).unwrap();
-        assert_eq!(observed.observer("exp"), Some(&Float(x.exp())));
+        assert_eq!(observed.observer("exp"), Some(&Float(libm::expf(x))));
+    }
+
+    /// The interpreter's transcendentals come from `libm`, not from the host.
+    ///
+    /// This is what makes it a usable reference: a generated `no_std` monitor
+    /// calls `libm`, so an interpreter calling the platform's own maths library
+    /// would disagree with the code it is supposed to be the reference for —
+    /// and would disagree differently on different machines. The two libraries
+    /// really do differ here, which is why the distinction is worth a test.
+    #[test]
+    fn transcendentals_follow_libm_rather_than_the_host() {
+        let x = -0.99448436f32;
+        assert_ne!(
+            libm::expf(x).to_bits(),
+            x.exp().to_bits(),
+            "chosen argument no longer distinguishes libm from the host"
+        );
+
+        let b = Builder::new();
+        b.observe("exp", b.lit(x).exp());
+        let spec = b.finish().unwrap();
+
+        let mut monitor = Monitor::new(&spec).unwrap();
+        let observed = monitor.step(&mut Samples::none()).unwrap();
+        assert_eq!(observed.observer("exp"), Some(&Float(libm::expf(x))));
     }
 
     /// Every comparison against NaN is false, including `<=` and `>=`.

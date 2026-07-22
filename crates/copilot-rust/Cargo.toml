@@ -13,7 +13,9 @@ copilot-core = { path = "../copilot-core", version = "0.1.0" }
 [dev-dependencies]
 copilot-interp = { path = "../copilot-interp", version = "0.1.0" }
 copilot-lang = { path = "../copilot-lang", version = "0.1.0" }
+copilot-gen = { path = "../copilot-gen", version = "0.1.0" }
 copilot-libs = { path = "../copilot-libs", version = "0.1.0" }
+libm = "0.2"
 proptest = "1"
 
 [lints]

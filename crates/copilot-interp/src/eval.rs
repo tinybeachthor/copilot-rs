@@ -110,6 +110,27 @@ macro_rules! floating {
     };
 }
 
+/// Applies a maths-library function at the operand's own width.
+///
+/// These go through `libm` rather than the standard library, so that the
+/// interpreter computes exactly what a generated `no_std` monitor computes.
+/// `std`'s transcendentals are the host platform's, which differ between
+/// implementations in the last place and would make the reference
+/// implementation's answers depend on the machine it ran on. Routing both
+/// through one library removes the discrepancy rather than documenting it.
+///
+/// The single-precision entry points are used for `Float`, keeping the
+/// evaluation width equal to the operands' — see `docs/deviations.md`.
+macro_rules! transcendental {
+    ($value:expr, $single:path, $double:path) => {
+        match $value {
+            Value::Float(x) => Value::Float($single(*x)),
+            Value::Double(x) => Value::Double($double(*x)),
+            other => return Err(unsupported(other)),
+        }
+    };
+}
+
 fn apply1(op: &Op1, a: &Value) -> Result<Value> {
     Ok(match op {
         Op1::Not => match a {
@@ -143,23 +164,23 @@ fn apply1(op: &Op1, a: &Value) -> Result<Value> {
             other => return Err(unsupported(other)),
         },
         Op1::Recip(_) => floating!(a, |x| x.recip()),
-        Op1::Exp(_) => floating!(a, |x| x.exp()),
-        Op1::Sqrt(_) => floating!(a, |x| x.sqrt()),
-        Op1::Log(_) => floating!(a, |x| x.ln()),
-        Op1::Sin(_) => floating!(a, |x| x.sin()),
-        Op1::Cos(_) => floating!(a, |x| x.cos()),
-        Op1::Tan(_) => floating!(a, |x| x.tan()),
-        Op1::Asin(_) => floating!(a, |x| x.asin()),
-        Op1::Acos(_) => floating!(a, |x| x.acos()),
-        Op1::Atan(_) => floating!(a, |x| x.atan()),
-        Op1::Sinh(_) => floating!(a, |x| x.sinh()),
-        Op1::Cosh(_) => floating!(a, |x| x.cosh()),
-        Op1::Tanh(_) => floating!(a, |x| x.tanh()),
-        Op1::Asinh(_) => floating!(a, |x| x.asinh()),
-        Op1::Acosh(_) => floating!(a, |x| x.acosh()),
-        Op1::Atanh(_) => floating!(a, |x| x.atanh()),
-        Op1::Ceiling(_) => floating!(a, |x| x.ceil()),
-        Op1::Floor(_) => floating!(a, |x| x.floor()),
+        Op1::Exp(_) => transcendental!(a, libm::expf, libm::exp),
+        Op1::Sqrt(_) => transcendental!(a, libm::sqrtf, libm::sqrt),
+        Op1::Log(_) => transcendental!(a, libm::logf, libm::log),
+        Op1::Sin(_) => transcendental!(a, libm::sinf, libm::sin),
+        Op1::Cos(_) => transcendental!(a, libm::cosf, libm::cos),
+        Op1::Tan(_) => transcendental!(a, libm::tanf, libm::tan),
+        Op1::Asin(_) => transcendental!(a, libm::asinf, libm::asin),
+        Op1::Acos(_) => transcendental!(a, libm::acosf, libm::acos),
+        Op1::Atan(_) => transcendental!(a, libm::atanf, libm::atan),
+        Op1::Sinh(_) => transcendental!(a, libm::sinhf, libm::sinh),
+        Op1::Cosh(_) => transcendental!(a, libm::coshf, libm::cosh),
+        Op1::Tanh(_) => transcendental!(a, libm::tanhf, libm::tanh),
+        Op1::Asinh(_) => transcendental!(a, libm::asinhf, libm::asinh),
+        Op1::Acosh(_) => transcendental!(a, libm::acoshf, libm::acosh),
+        Op1::Atanh(_) => transcendental!(a, libm::atanhf, libm::atanh),
+        Op1::Ceiling(_) => transcendental!(a, libm::ceilf, libm::ceil),
+        Op1::Floor(_) => transcendental!(a, libm::floorf, libm::floor),
         Op1::BwNot(_) => integral!(a, |x| !x),
         Op1::Cast { to, .. } => cast(a, to)?,
         Op1::GetField { field, .. } => match a {
@@ -193,18 +214,24 @@ fn apply2(op: &Op2, a: &Value, b: &Value, policy: IndexPolicy) -> Result<Value> 
             _ => return Err(unsupported(a)),
         },
         Op2::Pow(_) => match (a, b) {
-            (Value::Float(x), Value::Float(y)) => Value::Float(x.powf(*y)),
-            (Value::Double(x), Value::Double(y)) => Value::Double(x.powf(*y)),
+            (Value::Float(x), Value::Float(y)) => Value::Float(libm::powf(*x, *y)),
+            (Value::Double(x), Value::Double(y)) => Value::Double(libm::pow(*x, *y)),
             _ => return Err(unsupported(a)),
         },
+        // `log(x, base)` is `ln x / ln base`, which is how the standard library
+        // defines it and what the code generators emit.
         Op2::Logb(_) => match (a, b) {
-            (Value::Float(x), Value::Float(base)) => Value::Float(x.log(*base)),
-            (Value::Double(x), Value::Double(base)) => Value::Double(x.log(*base)),
+            (Value::Float(x), Value::Float(base)) => {
+                Value::Float(libm::logf(*x) / libm::logf(*base))
+            }
+            (Value::Double(x), Value::Double(base)) => {
+                Value::Double(libm::log(*x) / libm::log(*base))
+            }
             _ => return Err(unsupported(a)),
         },
         Op2::Atan2(_) => match (a, b) {
-            (Value::Float(y), Value::Float(x)) => Value::Float(y.atan2(*x)),
-            (Value::Double(y), Value::Double(x)) => Value::Double(y.atan2(*x)),
+            (Value::Float(y), Value::Float(x)) => Value::Float(libm::atan2f(*y, *x)),
+            (Value::Double(y), Value::Double(x)) => Value::Double(libm::atan2(*y, *x)),
             _ => return Err(unsupported(a)),
         },
 
