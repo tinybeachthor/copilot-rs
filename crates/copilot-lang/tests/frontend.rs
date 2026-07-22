@@ -264,3 +264,48 @@ fn every_operator_builds_well_typed_ir() {
 
     b.finish().expect("every operator must build well-typed IR");
 }
+
+/// Reading past the end of a buffer is legal whenever the stream's own
+/// definition can supply the value.
+///
+/// A stream buffering `n` values defines its value at `t + n` to be its
+/// transition expression at `t`, so `drop n` of it is that expression. Without
+/// this, `[false] ++ p` could not be shifted back to `p`, and every bounded
+/// future-time operator would be unusable — which is how M3 found it missing.
+mod dropping_past_the_buffer {
+    use super::*;
+
+    #[test]
+    fn peels_one_layer_off_an_appended_stream() {
+        let b = Builder::new();
+        let raw = b.extern_::<u32>("p");
+        let delayed = b.append(&[0u32], raw);
+
+        // `delayed` is [0, p0, p1, ..], so shifting it once recovers `p`
+        // exactly — the same arena node, not merely an equal one.
+        assert_eq!(delayed.drop(1).expr(), raw.expr());
+
+        b.observe("out", delayed.drop(1));
+        b.finish().unwrap();
+    }
+
+    #[test]
+    fn still_refuses_to_read_an_external_variable_s_future() {
+        let b = Builder::new();
+        let raw = b.extern_::<u32>("p");
+        let delayed = b.append(&[0u32], raw);
+
+        // One shift lands on `p` now; two would need its next sample.
+        b.observe("out", delayed.drop(2));
+        assert!(matches!(b.finish(), Err(Error::DropOnExtern(name)) if name == "p"));
+    }
+
+    /// A stream whose next value would be defined by its own next value.
+    #[test]
+    fn refuses_a_definition_that_would_need_itself() {
+        let b = Builder::new();
+        let bad = b.stream([0u32], |s| s.drop(1));
+        b.observe("out", bad);
+        assert!(b.finish().is_err());
+    }
+}

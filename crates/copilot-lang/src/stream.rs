@@ -49,7 +49,12 @@ impl<'a, T> Stream<'a, T> {
         self.expr
     }
 
-    pub(crate) fn builder(&self) -> &'a Builder {
+    /// The builder this stream belongs to.
+    ///
+    /// Combinator libraries need it to create constants and buffered streams
+    /// from an existing stream, without threading the builder separately
+    /// through every signature.
+    pub fn builder(&self) -> &'a Builder {
         self.builder
     }
 }

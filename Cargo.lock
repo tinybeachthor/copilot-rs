@@ -65,6 +65,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "copilot-libs"
+version = "0.1.0"
+dependencies = [
+ "copilot-core",
+ "copilot-interp",
+ "copilot-lang",
+]
+
+[[package]]
 name = "copilot-macro"
 version = "0.1.0"
 dependencies = [
@@ -80,6 +89,7 @@ dependencies = [
  "copilot-core",
  "copilot-interp",
  "copilot-lang",
+ "copilot-libs",
  "proptest",
 ]
 

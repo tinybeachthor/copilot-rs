@@ -7,7 +7,7 @@ hard-realtime embedded systems (used by NASA Langley for UAS flight monitoring).
 mutually-recursive infinite streams; the compiler emits a monitor that runs in **constant time and
 constant memory**, and the spec itself is **verifiable** by SMT.
 
-**Status: M0–M2 complete.** See the milestone table below. This document is the plan; decisions taken
+**Status: M0–M3 complete.** See the milestone table below. This document is the plan; decisions taken
 along the way — and the reasons for them — are recorded in [docs/deviations.md](docs/deviations.md),
 which is the living record. Where a sketch below disagrees with the code, the code is right.
 
@@ -349,8 +349,8 @@ across `--harness` invocations.
 | M0 | **done** | Workspace, `copilot-core` IR, typechecker, `wellformed`, `resources`, `cost` | Hand-built `Spec` typechecks; footprint test passes |
 | M1 | **done** | `copilot-lang` builder, `copilot-interp`, heater example | Heater spec runs in the interpreter, matches hand-computed trace |
 | M2 | **done** | `copilot-rust` backend, `#[derive(CopilotStruct)]`, arrays, layer-1 testing | `proptest` differential green; `size_of::<Monitor>()` matches `resources()` |
-| M3 | next | `copilot-libs` (PTLTL, LTL, MTL, clocks, voting, FSM) | Upstream tutorial examples reproduce |
-| M4 | | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
+| M3 | **done** | `copilot-libs` (PTLTL, LTL, MTL, clocks, voting, FSM) | Upstream tutorial examples reproduce |
+| M4 | next | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
 | M5 | | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on heater + fib; a deliberately broken codegen (phases 3/4 swapped) is caught |
 | M6 | | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
 | M7 | | `copilot-bluespec` | `bsc` compiles output; bluesim trace matches interpreter |

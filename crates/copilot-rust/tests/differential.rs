@@ -121,6 +121,7 @@ generated!(gen_arrays, "golden/arrays.rs");
 generated!(gen_maths, "golden/maths.rs");
 generated!(gen_structs, "golden/structs.rs");
 generated!(gen_operators, "golden/operators.rs");
+generated!(gen_library, "golden/library.rs");
 
 /// An environment for a monitor that reads nothing.
 struct NoEnv;
@@ -160,6 +161,7 @@ fn every_monitor_occupies_exactly_the_reported_footprint() {
     check!("maths", support::maths(), gen_maths);
     check!("structs", support::structs(), gen_structs);
     check!("operators", support::operators(), gen_operators);
+    check!("library", support::library(), gen_library);
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +713,94 @@ proptest! {
         let mut handler = OperatorsHandler::default();
         for (&(i, j, u, v, f, h, g, p, q), step) in inputs.iter().zip(&expected) {
             monitor.step(&mut OperatorsEnv { i, j, u, v, f, h, g, p, q }, &mut handler);
+            prop_assert_eq!(&handler.0.take(), step);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// library — a specification built from copilot-libs combinators
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct LibraryHandler(Recorder);
+
+impl gen_library::Handler for LibraryHandler {
+    fn degraded(&mut self, arg0: u8) {
+        self.0.fired("degraded", vec![Word8(arg0)]);
+    }
+
+    observers! {
+        observe_reading => "reading": u8 = Word8;
+        observe_trustworthy => "trustworthy": bool = Bool;
+        observe_mode => "mode": u8 = Word8;
+        observe_was_armed => "was_armed": bool = Bool;
+        observe_clean_run => "clean_run": bool = Bool;
+        observe_since_armed => "since_armed": bool = Bool;
+        observe_tick => "tick": bool = Bool;
+    }
+}
+
+struct LibraryEnv {
+    armed: bool,
+    fault: bool,
+    sensors: [u8; 3],
+}
+
+impl gen_library::Env for LibraryEnv {
+    fn armed(&mut self) -> bool {
+        self.armed
+    }
+    fn fault(&mut self) -> bool {
+        self.fault
+    }
+    fn s0(&mut self) -> u8 {
+        self.sensors[0]
+    }
+    fn s1(&mut self) -> u8 {
+        self.sensors[1]
+    }
+    fn s2(&mut self) -> u8 {
+        self.sensors[2]
+    }
+}
+
+proptest! {
+    /// The combinators in `copilot-libs` are only a way of writing a
+    /// specification, so a monitor built from them has to agree with the
+    /// interpreter exactly like a hand-written one. Temporal operators are the
+    /// most likely thing in the project to be off by one step, and this is the
+    /// test that would say so.
+    #[test]
+    fn library_agrees(
+        trace in prop::collection::vec(
+            (any::<bool>(), any::<bool>(), any::<u8>(), any::<u8>(), any::<u8>()),
+            1..20,
+        ),
+    ) {
+        let spec = support::library();
+        let samples: Vec<Samples> = trace
+            .iter()
+            .map(|&(armed, fault, a, b, c)| {
+                Samples::none()
+                    .with("armed", Bool(armed))
+                    .with("fault", Bool(fault))
+                    .with("s0", Word8(a))
+                    .with("s1", Word8(b))
+                    .with("s2", Word8(c))
+            })
+            .collect();
+        let names = [
+            "reading", "trustworthy", "mode", "was_armed", "clean_run",
+            "since_armed", "tick", "degraded",
+        ];
+        let expected = interpret(&spec, &samples, &names);
+
+        let mut monitor = gen_library::Monitor::new();
+        let mut handler = LibraryHandler::default();
+        for (&(armed, fault, a, b, c), step) in trace.iter().zip(&expected) {
+            let mut env = LibraryEnv { armed, fault, sensors: [a, b, c] };
+            monitor.step(&mut env, &mut handler);
             prop_assert_eq!(&handler.0.take(), step);
         }
     }

@@ -249,3 +249,57 @@ a bare identifier, precedence can never matter.
 compiles every corpus monitor with `-D warnings` against a `no_std` maths stub, so this stays true.
 Generated code lands in someone else's build; it should not be the reason their warning count goes
 up, and it should not silence lints on their behalf.
+
+## 15. `since` follows the standard semantics, not upstream's formula
+
+**Implemented** (M3, `copilot_libs::ptltl::since`).
+
+Upstream defines past-time `since` as:
+
+```haskell
+since s1 s2 = eventuallyPrev (s2 ==> (alwaysBeen s1))
+```
+
+with the documented meaning "is there a time when `s2` holds and after which `s1` continuously
+holds?"
+
+The formula does not mean that. An implication is true wherever its antecedent is false, so at any
+step where `s2` was false, `s2 ==> _` holds; `eventuallyPrev` then finds that step and the whole
+expression is true from there on, whatever `s1` did. Under this definition `since(s1, s2)` is true at
+almost every step of almost every trace — including traces where `s2` never holds at all and `s1`
+never holds at all.
+
+copilot-rs uses the standard recursion instead:
+
+```text
+since(t) = s2(t) || (s1(t) && since(t - 1)),   since(-1) = false
+```
+
+which is exactly "there is some `k <= t` with `s2(k)`, and `s1(j)` for every `j` in `(k, t]`" — one
+bit of state, like the other past-time operators.
+
+This is the one place where fidelity to upstream and correctness genuinely conflict, and a
+temporal operator that silently reports "yes" is the wrong way to be wrong in a runtime monitor for
+safety-critical systems. `since_is_false_when_its_trigger_never_occurs` in
+`crates/copilot-libs/tests/libs.rs` builds both formulas over one trace and shows them disagreeing
+at every step.
+
+## 16. `drop` past a buffer peels the stream's definition
+
+**Implemented** (M3, in `copilot-lang`'s shift; a fix to M1).
+
+A stream buffering `n` values defines its value at `t + n` as its transition expression at `t`.
+`drop (n + k) s` is therefore `drop k` of that expression, and only a stream whose definition cannot
+supply the value — an external variable, or a stream still being defined — is a real error.
+
+M1 implemented `drop` as index arithmetic alone and rejected anything past the buffer. That made
+`[false] ++ p` unshiftable back to `p`, which in turn made every bounded future-time operator in
+[`copilot_libs::ltl`] and [`copilot_libs::mtl`] unusable — the whole point of buffering a stream
+before reading ahead in it. The rewrite terminates because peeling replaces a shift of `by` with one
+of `idx + by - n`, and `idx < n`.
+
+A related trap, worth recording because it is invisible in the Haskell original: these recursions
+are written in upstream as lazy definitions where the base case never forces the shifted streams.
+Rust evaluates arguments first, so a direct transliteration builds one shift too many — an error
+outright on an external variable, and for the past-time metric operators a buffered stream the
+monitor would carry and never read. `copilot_libs::mtl` guards each step explicitly.

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/copilot-core", "crates/copilot-lang", "crates/copilot-interp", "crates/copilot", "crates/copilot-rust", "crates/copilot-macro"]
+members = ["crates/copilot-core", "crates/copilot-lang", "crates/copilot-interp", "crates/copilot", "crates/copilot-rust", "crates/copilot-macro", "crates/copilot-libs"]
 
 [workspace.package]
 version = "0.1.0"

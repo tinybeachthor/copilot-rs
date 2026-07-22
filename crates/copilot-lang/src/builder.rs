@@ -62,7 +62,23 @@ impl Builder {
         initial: [T; N],
         f: impl FnOnce(Stream<'a, T>) -> Stream<'a, T>,
     ) -> Stream<'a, T> {
-        let id = match self.inner.borrow_mut().declare_stream(T::ty(), N) {
+        self.stream_from(&initial, f)
+    }
+
+    /// [`Builder::stream`] with the initial values given as a slice.
+    ///
+    /// For buffers whose length is not known until the specification is built —
+    /// a clock's period, say — where a fixed-size array cannot express it.
+    pub fn stream_from<'a, T: Typed>(
+        &'a self,
+        initial: &[T],
+        f: impl FnOnce(Stream<'a, T>) -> Stream<'a, T>,
+    ) -> Stream<'a, T> {
+        let id = match self
+            .inner
+            .borrow_mut()
+            .declare_stream(T::ty(), initial.len())
+        {
             Ok(id) => id,
             Err(e) => return self.poisoned(e),
         };
@@ -73,11 +89,29 @@ impl Builder {
         };
 
         let body = f(handle);
-        let buffer = initial.into_iter().map(Typed::lift).collect();
+        let buffer = initial.iter().copied().map(Typed::lift).collect();
         self.inner
             .borrow_mut()
             .define_stream(id, buffer, body.expr());
         handle
+    }
+
+    /// `initial ++ s`: the values of `initial`, then `s` delayed by that many
+    /// steps.
+    ///
+    /// Upstream Copilot writes this `[a, b] ++ s`. It is the non-recursive case
+    /// of [`Builder::stream`] — the stream being defined does not refer to
+    /// itself — and it is how the temporal libraries reach into the past.
+    ///
+    /// ```
+    /// # use copilot_lang::Builder;
+    /// let b = Builder::new();
+    /// let counter = b.stream([0u32], |s| s + 1u32);
+    /// let lagging = b.append(&[0u32], counter);   // counter, one step late
+    /// # b.finish().unwrap();
+    /// ```
+    pub fn append<'a, T: Typed>(&'a self, initial: &[T], s: Stream<'a, T>) -> Stream<'a, T> {
+        self.stream_from(initial, |_| s)
     }
 
     /// A stream of the constant `value`.
@@ -220,8 +254,12 @@ impl Builder {
             return Ok(expr);
         }
         let mut inner = self.inner.borrow_mut();
+        let Inner {
+            arena, definitions, ..
+        } = &mut *inner;
+        let definitions = &*definitions;
         let mut memo = HashMap::new();
-        shift(&mut inner.arena, expr, by, &mut memo)
+        shift(arena, definitions, expr, by, &mut memo)
     }
 }
 
@@ -243,50 +281,96 @@ impl Inner {
 ///
 /// Memoized on the way down: hash-consing means a subexpression can be reached
 /// along many paths, and shifting it once per path would be exponential in the
-/// depth of the sharing.
+/// depth of the sharing. The memo is keyed on the shift amount as well as the
+/// expression, because peeling a stream open (below) recurses with a smaller
+/// one.
 fn shift(
     arena: &mut Arena,
+    definitions: &[Option<Definition>],
     expr: ExprId,
     by: u32,
-    memo: &mut HashMap<ExprId, ExprId>,
+    memo: &mut HashMap<(ExprId, u32), ExprId>,
 ) -> Result<ExprId> {
-    if let Some(&done) = memo.get(&expr) {
+    // Shifting by nothing is the identity, externals included. Peeling a stream
+    // open can land here with nothing left to shift, and that is exactly the
+    // case where reading an external variable is fine: `[false] ++ p` shifted
+    // once is `p` at the current step, not `p` in the future.
+    if by == 0 {
+        return Ok(expr);
+    }
+    if let Some(&done) = memo.get(&(expr, by)) {
         return Ok(done);
     }
 
     let shifted = match arena.node(expr).clone() {
         // A literal is the same at every time.
         Node::Const { .. } => expr,
-        Node::Drop { idx, stream } => arena.drop_(idx + by, stream)?,
+
+        // Reading ahead within the buffer is just a deeper index. Reading past
+        // it is still meaningful: a stream buffering `n` values defines its
+        // value at `t + n` as its transition expression evaluated at `t`, so
+        // `drop (n + k) s` is `drop k` of that expression. This is what lets
+        // `[false] ++ p` be shifted once to recover `p`, which is how the
+        // bounded-future operators reach forward at all.
+        //
+        // The recursion terminates because `idx < n`, so the remaining shift
+        // `idx + by - n` is strictly smaller than `by`.
+        Node::Drop { idx, stream } => {
+            let buffered = arena.stream_decl(stream)?.buffer_len as u32;
+            if idx + by < buffered {
+                arena.drop_(idx + by, stream)?
+            } else {
+                let definition = definitions
+                    .get(stream.index())
+                    .and_then(|d| d.as_ref())
+                    // The stream is still being defined, so its transition
+                    // expression does not exist yet and cannot be peeled. This
+                    // is a stream whose next value depends on its own next
+                    // value.
+                    .ok_or(Error::Core(copilot_core::Error::DropOutOfRange {
+                        stream,
+                        idx: idx + by,
+                        buffer_len: buffered as usize,
+                    }))?;
+                shift(
+                    arena,
+                    definitions,
+                    definition.expr,
+                    idx + by - buffered,
+                    memo,
+                )?
+            }
+        }
+
         Node::ExternVar { name, .. } => return Err(Error::DropOnExtern(name)),
         Node::Var(_) => expr,
         Node::Local { var, bound, body } => {
-            let bound = shift(arena, bound, by, memo)?;
-            let body = shift(arena, body, by, memo)?;
+            let bound = shift(arena, definitions, bound, by, memo)?;
+            let body = shift(arena, definitions, body, by, memo)?;
             arena.local(var, bound, body)?
         }
         Node::Op1(op, a) => {
-            let a = shift(arena, a, by, memo)?;
+            let a = shift(arena, definitions, a, by, memo)?;
             arena.op1(op, a)?
         }
         Node::Op2(op, a, b) => {
-            let a = shift(arena, a, by, memo)?;
-            let b = shift(arena, b, by, memo)?;
+            let a = shift(arena, definitions, a, by, memo)?;
+            let b = shift(arena, definitions, b, by, memo)?;
             arena.op2(op, a, b)?
         }
         Node::Op3(op, a, b, c) => {
-            let a = shift(arena, a, by, memo)?;
-            let b = shift(arena, b, by, memo)?;
-            let c = shift(arena, c, by, memo)?;
+            let a = shift(arena, definitions, a, by, memo)?;
+            let b = shift(arena, definitions, b, by, memo)?;
+            let c = shift(arena, definitions, c, by, memo)?;
             arena.op3(op, a, b, c)?
         }
         Node::Label(name, a) => {
-            let a = shift(arena, a, by, memo)?;
+            let a = shift(arena, definitions, a, by, memo)?;
             arena.label(name, a)
         }
     };
 
-    memo.insert(expr, shifted);
+    memo.insert((expr, by), shifted);
     Ok(shifted)
 }
 

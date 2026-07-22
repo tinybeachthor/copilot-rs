@@ -407,3 +407,26 @@ mod selection {
         assert_eq!(observed, [false, false, true, true, true, false].map(Bool));
     }
 }
+
+/// `drop n` past a stream's buffer evaluates its definition forward, so a
+/// counter can be read arbitrarily far ahead.
+///
+/// The frontend rewrites this while the spec is built; the values below are the
+/// check that the rewrite means what it says.
+#[test]
+fn reading_ahead_past_the_buffer_evaluates_the_definition() {
+    let b = Builder::new();
+    let counter = b.stream([10u32], |c| c + 1u32);
+    b.observe("now", counter);
+    b.observe("next", counter.drop(1));
+    b.observe("later", counter.drop(3));
+    let spec = b.finish().unwrap();
+
+    let mut monitor = Monitor::new(&spec).unwrap();
+    for step in 0..4u32 {
+        let observed = monitor.step(&mut Samples::none()).unwrap();
+        assert_eq!(observed.observers[0].1, Value::Word32(10 + step));
+        assert_eq!(observed.observers[1].1, Value::Word32(11 + step));
+        assert_eq!(observed.observers[2].1, Value::Word32(13 + step));
+    }
+}

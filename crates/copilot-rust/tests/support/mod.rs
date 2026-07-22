@@ -286,6 +286,55 @@ pub fn operators() -> Spec {
     b.finish().unwrap()
 }
 
+/// A specification built out of `copilot-libs` rather than by hand.
+///
+/// The libraries are only combinators, so a monitor using them must generate,
+/// compile under `no_std`, and agree with the interpreter exactly like any
+/// other. That is the claim this entry keeps honest.
+pub fn library() -> Spec {
+    use copilot_libs::{
+        clocks, ptltl,
+        state_machine::{Transition, state_machine},
+        voting,
+    };
+
+    let b = Builder::new();
+    let armed = b.extern_::<bool>("armed");
+    let fault = b.extern_::<bool>("fault");
+
+    // Three redundant sensors, agreed on by majority vote.
+    let sensors: Vec<_> = ["s0", "s1", "s2"]
+        .iter()
+        .map(|n| b.extern_::<u8>(n))
+        .collect();
+    let reading = voting::majority(&sensors).unwrap();
+    let trustworthy = voting::a_majority(&sensors, reading).unwrap();
+
+    // 0 idle, 1 armed, 2 rejected.
+    let mode = state_machine(
+        &b,
+        0u8,
+        0u8,
+        2u8,
+        !armed & !fault,
+        &[
+            Transition::new(0, armed, 1),
+            Transition::new(1, fault, 2),
+            Transition::new(1, !fault, 1),
+        ],
+    );
+
+    b.observe("reading", reading);
+    b.observe("trustworthy", trustworthy);
+    b.observe("mode", mode);
+    b.observe("was_armed", ptltl::eventually_prev(armed));
+    b.observe("clean_run", ptltl::always_been(!fault));
+    b.observe("since_armed", ptltl::since(!fault, armed));
+    b.observe("tick", clocks::clk(&b, 4, 0).unwrap());
+    b.trigger("degraded", !trustworthy, args![reading]);
+    b.finish().unwrap()
+}
+
 /// Every corpus entry, by name.
 pub fn all() -> Vec<(&'static str, Spec)> {
     vec![
@@ -298,5 +347,6 @@ pub fn all() -> Vec<(&'static str, Spec)> {
         ("maths", maths()),
         ("structs", structs()),
         ("operators", operators()),
+        ("library", library()),
     ]
 }
