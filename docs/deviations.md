@@ -110,19 +110,20 @@ zero.
 
 ## 5. Monitor state is `#[repr(C)]`
 
-**Decided** (M0 computes the footprint this way); **binds** the M2 Rust backend.
+**Implemented** (M0 computes the footprint this way; M2 emits it that way).
 
 `copilot_core::resources` reports a monitor's exact state size, computed under `repr(C)` with fields
 in stream order — buffer, then index, index omitted for single-element buffers.
 
-Generated monitors must declare their state exactly that way. `repr(Rust)` is free to reorder
-fields, which would make the reported footprint unfalsifiable; with `repr(C)` it can be asserted
-against `size_of`, and M0's test suite already does so against a hand-written struct.
+Generated monitors declare their state exactly that way. `repr(Rust)` is free to reorder fields,
+which would make the reported footprint unfalsifiable; with `repr(C)` it can be asserted against
+`size_of`, and `every_monitor_occupies_exactly_the_reported_footprint` in
+`crates/copilot-rust/tests/differential.rs` does so for every corpus specification against the real
+compiled type.
 
 ## 6. Array index policy is explicit
 
-**Implemented** (M1, `copilot_core::IndexPolicy`, honoured by the interpreter; backends follow in
-M2).
+**Implemented** (M1 in `copilot_core::IndexPolicy` and the interpreter; M2 in the Rust backend).
 
 `Op2::Index` takes a runtime `Word32`, so an out-of-range index is possible. Upstream's C backend
 emits an unchecked subscript, which is undefined behaviour.
@@ -197,3 +198,54 @@ spec that compiles is well-typed. What remains is `drop` misuse and invalid iden
 The first error is kept rather than the last: later failures are usually consequences of the first,
 and the stand-in handle returned after a failure would otherwise generate a cascade of less
 informative ones.
+
+## 12. Struct fields are reached through a generated trait
+
+**Implemented** (M1 for the IR; M2 for the frontend, via `#[derive(CopilotStruct)]`).
+
+Upstream reaches a struct field with a type-level symbol and a selector function. copilot-rs
+generates a `<Name>Fields` trait next to the struct, implemented for `Stream<'_, Name>`:
+
+```rust
+#[derive(Clone, Copy, CopilotStruct)]
+#[repr(C)]
+struct Reading { altitude: f32, valid: bool }
+
+let climbing = sensor.altitude().gt_val(1000.0);   // Stream<f32>
+let cleared  = sensor.set_altitude(b.lit(0.0));    // Stream<Reading>
+```
+
+A trait rather than inherent methods because `Stream` belongs to another crate, and only the
+defining crate may add inherent methods to a type. `Stream::field` and `Stream::with_field` take the
+field name as a string and are what the generated accessors are built from; they are public, but
+they move the field-name check from compile time to `Builder::finish`, so prefer the accessors.
+
+## 13. Trigger arguments are always evaluated
+
+**Implemented** (M2, `copilot-rust`).
+
+The interpreter evaluates a trigger's arguments only when its guard holds. Generated code evaluates
+every reachable subexpression up front, guard or no guard, and the `if` merely chooses whether to
+call the handler.
+
+Expressions are pure, so this is unobservable — and evaluating unconditionally is the point: it is
+what makes a step's timing independent of its data, which is the whole claim behind "hard realtime".
+A monitor whose execution time depended on whether an alarm fired would leak its own verdict into
+its schedule.
+
+The one visible consequence is under `IndexPolicy::Assume`, where an out-of-range subscript inside a
+trigger argument becomes a proof obligation even on steps where the trigger stays silent.
+
+## 14. Generated code carries no lint suppressions
+
+**Implemented** (M2).
+
+Generated Rust is emitted warning-free rather than with a blanket `#[allow]`: unused trait
+parameters are named with a leading underscore, no-op casts and `+ 0` are not emitted, and no
+redundant parentheses are produced — since every node is bound to its own `let` and every operand is
+a bare identifier, precedence can never matter.
+
+`every_monitor_compiles_without_the_standard_library` in `crates/copilot-rust/tests/no_std.rs`
+compiles every corpus monitor with `-D warnings` against a `no_std` maths stub, so this stays true.
+Generated code lands in someone else's build; it should not be the reason their warning count goes
+up, and it should not silence lints on their behalf.

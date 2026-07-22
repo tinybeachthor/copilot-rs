@@ -521,8 +521,8 @@ fn same_as_tag(op: &'static str, tag: &Type, operand: &Type) -> Result<()> {
 
 fn field_ty<'a>(struct_ty: &'a Type, field: &str) -> Result<&'a Type> {
     match struct_ty {
-        Type::Struct { name, .. } => struct_ty.field(field).ok_or_else(|| Error::UnknownField {
-            struct_name: name.clone(),
+        Type::Struct(s) => struct_ty.field(field).ok_or_else(|| Error::UnknownField {
+            struct_name: s.name.clone(),
             field: field.to_string(),
         }),
         other => Err(Error::OperandClass {

@@ -97,6 +97,33 @@ impl<'a, T: Typed> Stream<'a, T> {
         }
     }
 
+    /// Projects a field out of a struct-typed stream.
+    ///
+    /// The field name is not checked by the compiler, so prefer the accessors
+    /// that `#[derive(CopilotStruct)]` generates; this is what they are built
+    /// from. A name that does not exist, or a `U` that is not its type, is
+    /// reported by [`Builder::finish`](crate::Builder::finish).
+    pub fn field<U: Typed>(self, name: &str) -> Stream<'a, U> {
+        self.unary(Op1::GetField {
+            struct_ty: T::ty(),
+            field: name.to_string(),
+        })
+    }
+
+    /// The struct with one field replaced.
+    ///
+    /// Copies the whole struct; [`copilot_core::cost`] reports the bytes moved.
+    /// As with [`Stream::field`], prefer the generated accessors.
+    pub fn with_field<U: Typed>(self, name: &str, value: Stream<'a, U>) -> Stream<'a, T> {
+        self.binary(
+            Op2::UpdateField {
+                struct_ty: T::ty(),
+                field: name.to_string(),
+            },
+            value.expr(),
+        )
+    }
+
     /// Applies a binary operator.
     pub(crate) fn binary<U: Typed>(self, op: Op2, rhs: ExprId) -> Stream<'a, U> {
         match self.builder.build(|arena| arena.op2(op, self.expr, rhs)) {

@@ -34,7 +34,7 @@
 //!
 //! See `examples/heater.rs` for a spec driven over a full trace.
 
-pub use copilot_lang::{Builder, Error, Result, Stream, args, classes};
+pub use copilot_lang::{Builder, CopilotStruct, Error, Result, Stream, args, classes};
 
 pub use copilot_interp::{Env, Fired, Monitor, Observation, Samples};
 

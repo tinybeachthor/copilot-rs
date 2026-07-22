@@ -47,6 +47,37 @@
 //! buffer reaches — `fib` buffers two values, so `drop(1)` is available and
 //! `drop(2)` is not.
 //!
+//! # Structs
+//!
+//! `#[derive(CopilotStruct)]` makes a Rust struct usable as a stream type. It
+//! generates the [`Typed`] implementation and a `<Name>Fields` trait giving
+//! type-checked access to the fields of a stream:
+//!
+//! ```
+//! use copilot_lang::{Builder, CopilotStruct, args};
+//!
+//! #[derive(Clone, Copy, CopilotStruct)]
+//! #[repr(C)]
+//! struct Reading {
+//!     altitude: f32,
+//!     valid: bool,
+//! }
+//!
+//! let b = Builder::new();
+//! let sensor = b.extern_::<Reading>("sensor");
+//!
+//! let climbing = sensor.altitude().gt_val(1000.0);   // Stream<bool>
+//! let cleared = sensor.set_altitude(b.lit(0.0));     // Stream<Reading>
+//!
+//! b.observe("cleared", cleared);
+//! b.trigger("high", climbing, args![sensor.altitude()]);
+//! # b.finish().unwrap();
+//! ```
+//!
+//! The accessors come through a trait rather than as inherent methods because
+//! [`Stream`] belongs to this crate, and only a type's own crate may add
+//! inherent methods to it.
+//!
 //! # Errors
 //!
 //! Almost nothing here can fail. The marker traits in [`classes`] admit an
@@ -63,6 +94,7 @@ mod ops;
 mod stream;
 
 pub use builder::Builder;
+pub use copilot_macro::CopilotStruct;
 pub use error::{Error, Result};
 pub use stream::Stream;
 

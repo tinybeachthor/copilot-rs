@@ -248,10 +248,10 @@ fn a_variable_outside_its_binder_is_rejected() {
 
 #[test]
 fn structs_project_and_update() {
-    let point = Type::Struct {
-        name: "Point".into(),
-        fields: vec![("x".into(), Type::Int32), ("y".into(), Type::Int32)],
-    };
+    let point = Type::structure(
+        "Point",
+        [("x".into(), Type::Int32), ("y".into(), Type::Int32)],
+    );
     let origin = Value::Struct {
         name: "Point".into(),
         fields: vec![("x".into(), Value::Int32(0)), ("y".into(), Value::Int32(0))],
@@ -484,10 +484,7 @@ mod rejects {
             Err(Error::ZeroLengthArray)
         ));
 
-        let empty_struct = Type::Struct {
-            name: "Void".into(),
-            fields: vec![],
-        };
+        let empty_struct = Type::structure("Void", []);
         assert!(matches!(
             arena.declare_stream(empty_struct, 1),
             Err(Error::EmptyStruct(_))

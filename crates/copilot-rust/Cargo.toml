@@ -1,0 +1,19 @@
+[package]
+name = "copilot-rust"
+description = "no_std Rust code generator for copilot-rs specifications"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+copilot-core = { path = "../copilot-core", version = "0.1.0" }
+
+[dev-dependencies]
+copilot-interp = { path = "../copilot-interp", version = "0.1.0" }
+copilot-lang = { path = "../copilot-lang", version = "0.1.0" }
+proptest = "1"
+
+[lints]
+workspace = true

@@ -43,12 +43,20 @@ pub enum Type {
         len: usize,
     },
     /// Named record with at least one field, in declaration order.
-    Struct {
-        /// Type name, used verbatim in generated code.
-        name: String,
-        /// Fields, in declaration order.
-        fields: Vec<(String, Type)>,
-    },
+    ///
+    /// Boxed so that `Type` stays 24 bytes rather than 48. A `Type` is stored
+    /// on every arena node and carried by every operator, so its size is paid
+    /// for by the whole IR, whereas struct types are rare.
+    Struct(Box<StructType>),
+}
+
+/// The name and fields of a struct type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructType {
+    /// Type name, used verbatim in generated code.
+    pub name: String,
+    /// Fields, in declaration order.
+    pub fields: Vec<(String, Type)>,
 }
 
 /// Size and alignment of a type, under `repr(C)` rules.
@@ -96,6 +104,33 @@ const fn round_up(value: usize, align: usize) -> usize {
 }
 
 impl Type {
+    /// A struct type with the given name and fields.
+    pub fn structure(
+        name: impl Into<String>,
+        fields: impl IntoIterator<Item = (String, Type)>,
+    ) -> Type {
+        Type::Struct(Box::new(StructType {
+            name: name.into(),
+            fields: fields.into_iter().collect(),
+        }))
+    }
+
+    /// An array of `len` elements of the given type.
+    pub fn array(elem: Type, len: usize) -> Type {
+        Type::Array {
+            elem: Box::new(elem),
+            len,
+        }
+    }
+
+    /// The struct's name and fields, for struct types.
+    pub fn as_struct(&self) -> Option<&StructType> {
+        match self {
+            Type::Struct(s) => Some(s),
+            _ => None,
+        }
+    }
+
     /// True for the signed and unsigned integer types.
     ///
     /// These are exactly the types admitting `Div`, `Mod`, and the bitwise
@@ -145,7 +180,7 @@ impl Type {
     /// a generated `step()` stay small enough for the bisimulation proof to run
     /// without an unwinding bound.
     pub fn is_scalar(&self) -> bool {
-        !matches!(self, Type::Array { .. } | Type::Struct { .. })
+        !matches!(self, Type::Array { .. } | Type::Struct(_))
     }
 
     /// Element type, for arrays.
@@ -159,7 +194,7 @@ impl Type {
     /// Type of the named field, for structs.
     pub fn field(&self, name: &str) -> Option<&Type> {
         match self {
-            Type::Struct { fields, .. } => fields.iter().find(|(n, _)| n == name).map(|(_, t)| t),
+            Type::Struct(s) => s.fields.iter().find(|(n, _)| n == name).map(|(_, t)| t),
             _ => None,
         }
     }
@@ -178,9 +213,9 @@ impl Type {
                     align: elem.align,
                 }
             }
-            Type::Struct { fields, .. } => {
+            Type::Struct(s) => {
                 let mut layout = Layout::EMPTY;
-                for (_, ty) in fields {
+                for (_, ty) in &s.fields {
                     layout.extend(ty.layout());
                 }
                 layout.pad_to_align()
@@ -198,11 +233,11 @@ impl Type {
                 }
                 elem.validate()
             }
-            Type::Struct { name, fields } => {
-                if fields.is_empty() {
-                    return Err(Error::EmptyStruct(name.clone()));
+            Type::Struct(s) => {
+                if s.fields.is_empty() {
+                    return Err(Error::EmptyStruct(s.name.clone()));
                 }
-                for (_, ty) in fields {
+                for (_, ty) in &s.fields {
                     ty.validate()?;
                 }
                 Ok(())
@@ -227,7 +262,7 @@ impl fmt::Display for Type {
             Type::Float => f.write_str("Float"),
             Type::Double => f.write_str("Double"),
             Type::Array { elem, len } => write!(f, "[{elem}; {len}]"),
-            Type::Struct { name, .. } => f.write_str(name),
+            Type::Struct(s) => f.write_str(&s.name),
         }
     }
 }
@@ -302,11 +337,9 @@ impl Value {
                     name,
                     fields: values,
                 },
-                Type::Struct {
-                    name: ty_name,
-                    fields: ty_fields,
-                },
+                Type::Struct(ty),
             ) => {
+                let (ty_name, ty_fields) = (&ty.name, &ty.fields);
                 name == ty_name
                     && values.len() == ty_fields.len()
                     && values
@@ -453,10 +486,7 @@ impl_typed! {
 
 impl<T: Typed, const N: usize> Typed for [T; N] {
     fn ty() -> Type {
-        Type::Array {
-            elem: Box::new(T::ty()),
-            len: N,
-        }
+        Type::array(T::ty(), N)
     }
 
     fn lift(self) -> Value {

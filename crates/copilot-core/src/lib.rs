@@ -110,4 +110,4 @@ pub use expr::{Arena, ExprId, Node, StreamDecl, StreamId, VarId};
 pub use op::{Op1, Op2, Op3, OpClass};
 pub use policy::{IndexPolicy, div, rem};
 pub use spec::{Arg, Observer, Prop, Property, Spec, Stream, Trigger};
-pub use ty::{Layout, Type, Typed, Value};
+pub use ty::{Layout, StructType, Type, Typed, Value};

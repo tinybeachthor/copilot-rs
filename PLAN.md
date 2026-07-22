@@ -7,7 +7,7 @@ hard-realtime embedded systems (used by NASA Langley for UAS flight monitoring).
 mutually-recursive infinite streams; the compiler emits a monitor that runs in **constant time and
 constant memory**, and the spec itself is **verifiable** by SMT.
 
-**Status: M0–M1 complete.** See the milestone table below. This document is the plan; decisions taken
+**Status: M0–M2 complete.** See the milestone table below. This document is the plan; decisions taken
 along the way — and the reasons for them — are recorded in [docs/deviations.md](docs/deviations.md),
 which is the living record. Where a sketch below disagrees with the code, the code is right.
 
@@ -148,7 +148,7 @@ Core passes, all in `copilot-core` so every backend and the verifier share them:
    implementation-defined/UB behaviour. We define it: IR arithmetic is wrapping, the interpreter
    wraps, codegen emits `wrapping_add` etc., SMT models it with `BitVec`. Total, panic-free,
    identical in debug and release.
-2. **Array index policy.** *Decided, not yet implemented — lands with M1/M2.* `Index` takes a
+2. **Array index policy.** *Implemented (M1 interpreter, M2 backend).* `Index` takes a
    runtime `Word32`. Codegen flag `IndexPolicy::{ Wrap, Saturate, Assume }`, default `Wrap`
    (`a[(i as usize) % N]`) — constant time, no panic, no UB. `Assume` emits a Kani `assume(i < N)`
    plus a bounds-checked get, for users who want the obligation surfaced as a proof goal instead.
@@ -348,8 +348,8 @@ across `--harness` invocations.
 |---|---|---|---|
 | M0 | **done** | Workspace, `copilot-core` IR, typechecker, `wellformed`, `resources`, `cost` | Hand-built `Spec` typechecks; footprint test passes |
 | M1 | **done** | `copilot-lang` builder, `copilot-interp`, heater example | Heater spec runs in the interpreter, matches hand-computed trace |
-| M2 | next | `copilot-rust` backend, `#[derive(CopilotStruct)]`, arrays, layer-1 testing | `proptest` differential green; `size_of::<Monitor>()` matches `resources()` |
-| M3 | | `copilot-libs` (PTLTL, LTL, MTL, clocks, voting, FSM) | Upstream tutorial examples reproduce |
+| M2 | **done** | `copilot-rust` backend, `#[derive(CopilotStruct)]`, arrays, layer-1 testing | `proptest` differential green; `size_of::<Monitor>()` matches `resources()` |
+| M3 | next | `copilot-libs` (PTLTL, LTL, MTL, clocks, voting, FSM) | Upstream tutorial examples reproduce |
 | M4 | | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
 | M5 | | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on heater + fib; a deliberately broken codegen (phases 3/4 swapped) is caught |
 | M6 | | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
@@ -359,21 +359,21 @@ M0–M2 is the load-bearing core; M3–M7 are independently shippable and can be
 
 Carried forward, to do before the milestone that depends on it:
 
-- **`Type` is 48 bytes**, because its `Struct` variant holds a `String` and a `Vec`. That inflates
-  `Error` to 128, so every `Result<Value>` in the interpreter's inner loop pays for the error path
-  (`clippy::result_large_err` is allowed at the workspace root with this rationale). Boxing
-  `Type::Struct`'s payload takes `Type` to 24 and halves the arena's per-node type storage as a side
-  effect. It changes the IR's public shape, so do it deliberately at the start of **M2**, before
-  differential testing puts the interpreter under load.
-- **Operator typing rules are still thinly tested by example.** `every_operator_builds_well_typed_ir`
-  now covers construction of all of them, but not their *rejection* behaviour. The M2 proptest
-  generator exercises that by construction, which is the right place for it.
+- **Random specification generation is not implemented.** M2's differential testing uses `proptest`
+  for *inputs* against a nine-specification corpus covering every operator, both index policies,
+  structs, arrays and the phase boundary — not for generating specifications themselves. Random
+  specs would need a well-typed `Spec` generator plus a `rustc` harness to compile them. Worth
+  building in **M4**, where the same generator also feeds the SMT encoding.
 - **`Error::TypeDrift` and `Error::NonMonotonicArena` have no tests**, because the arena's fields are
   private and an integration test cannot build a corrupted one. Needs in-crate unit tests before M5,
   since the verifier's soundness rests on `typecheck` catching exactly these.
-- **Struct support is IR-only.** `copilot-core` handles `GetField`/`UpdateField` and the interpreter
-  evaluates them, but the frontend has no way to build a struct-typed stream — that needs
-  `#[derive(CopilotStruct)]`, scheduled for M2.
+- **`Local` nodes are erased by the Rust backend**, by substituting each variable with its
+  definition. Correct for a pure language, and the frontend never emits `Local` today — but if M6's
+  macro does, a binding reachable only through an unused `Local` would produce an unused-variable
+  warning in generated code.
+- **`libm` and `std` differ on transcendentals**, so the differential tests point both engines at one
+  implementation and therefore check lowering rather than numerics. Closing that gap properly is
+  M4's job: the SMT encoding is the arbiter, not either implementation.
 
 ---
 
