@@ -68,6 +68,11 @@
 //! in release. Generated Rust uses the `wrapping_*` operations; the SMT
 //! encoding uses bitvectors.
 //!
+//! Division and remainder by zero are zero, and array subscript out of range
+//! follows a configurable [`IndexPolicy`]. These are the only two partial
+//! operations in the language, and both are made total for the same reason:
+//! a monitor that must not trap has no way to signal failure.
+//!
 //! # Building a spec
 //!
 //! ```
@@ -94,6 +99,7 @@ mod check;
 mod error;
 mod expr;
 mod op;
+mod policy;
 mod spec;
 mod ty;
 
@@ -102,5 +108,6 @@ pub use check::{typecheck, validate, wellformed};
 pub use error::{Error, Result};
 pub use expr::{Arena, ExprId, Node, StreamDecl, StreamId, VarId};
 pub use op::{Op1, Op2, Op3, OpClass};
+pub use policy::{IndexPolicy, div, rem};
 pub use spec::{Arg, Observer, Prop, Property, Spec, Stream, Trigger};
 pub use ty::{Layout, Type, Typed, Value};

@@ -183,6 +183,15 @@ pub enum Error {
     /// An existentially quantified property reached something that only handles
     /// universal ones. Matches upstream's `UnexpectedExistentialProposition`.
     ExistentialProperty(String),
+
+    /// An array was subscripted out of range under [`crate::IndexPolicy::Assume`],
+    /// which defines no behaviour there.
+    IndexOutOfRange {
+        /// The index used.
+        index: u32,
+        /// The array's length.
+        len: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -287,6 +296,11 @@ impl fmt::Display for Error {
             Error::ExistentialProperty(name) => write!(
                 f,
                 "property `{name}` is existentially quantified, which is not supported here"
+            ),
+            Error::IndexOutOfRange { index, len } => write!(
+                f,
+                "index {index} is out of range for an array of {len}, and IndexPolicy::Assume \
+                 defines no behaviour there"
             ),
         }
     }

@@ -1,0 +1,14 @@
+[package]
+name = "copilot-lang"
+description = "Builder frontend for copilot-rs: statically typed stream expressions over the core IR"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+copilot-core = { path = "../copilot-core", version = "0.1.0" }
+
+[lints]
+workspace = true

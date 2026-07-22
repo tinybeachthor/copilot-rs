@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/copilot-core"]
+members = ["crates/copilot-core", "crates/copilot-lang", "crates/copilot-interp", "crates/copilot"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,3 +12,16 @@ repository = "https://github.com/mtoman/copilot-rs"
 [workspace.lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# `copilot_core::Error` is 128 bytes, because `Type` is 48 (its `Struct` variant
+# carries a `String` and a `Vec`) and several variants hold two of them. That
+# makes every `Result<Value>` in the interpreter's inner loop pay for the error
+# path.
+#
+# The fix is to box `Type::Struct`'s payload, which would take `Type` to 24
+# bytes and shrink the arena's per-node type storage by half as a side effect.
+# That is a change to the IR's public shape, deliberately not made in the middle
+# of a milestone. Revisit in M2, when differential testing puts the interpreter
+# under real load and the cost becomes measurable rather than theoretical.
+result_large_err = "allow"

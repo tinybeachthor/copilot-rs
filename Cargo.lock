@@ -3,5 +3,29 @@
 version = 4
 
 [[package]]
+name = "copilot"
+version = "0.1.0"
+dependencies = [
+ "copilot-core",
+ "copilot-interp",
+ "copilot-lang",
+]
+
+[[package]]
 name = "copilot-core"
 version = "0.1.0"
+
+[[package]]
+name = "copilot-interp"
+version = "0.1.0"
+dependencies = [
+ "copilot-core",
+ "copilot-lang",
+]
+
+[[package]]
+name = "copilot-lang"
+version = "0.1.0"
+dependencies = [
+ "copilot-core",
+]

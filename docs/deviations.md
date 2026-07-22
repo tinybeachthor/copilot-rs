@@ -28,8 +28,7 @@ shares them.
 
 ## 2. Integer arithmetic wraps
 
-**Implemented** as an IR-level decision (M0, documented in `copilot_core`'s crate docs); enforced by
-the interpreter and backends from M1 onwards.
+**Implemented** (M0 as an IR-level decision; M1 in the interpreter).
 
 Upstream's C99 backend inherits C's semantics, where signed overflow is undefined behaviour. That is
 tolerable when C is the only backend and the generated code is then verified, but it does not
@@ -45,6 +44,43 @@ copilot-rs defines it: all integer arithmetic wraps.
 
 Specs relying on overflow being impossible should say so as a `Property` and have the prover
 discharge it, rather than relying on the arithmetic to trap.
+
+`abs` wraps too, so `i8::MIN.abs()` is `i8::MIN`. Rust's `abs` panics there and C's is undefined;
+neither is available to a monitor that must not trap.
+
+## 2a. The other partial operations are total too
+
+**Implemented** (M1, `copilot_core::policy`).
+
+Wrapping arithmetic settled overflow, but three more operations could still fail to denote a value.
+All are defined, for the same reason: a monitor cannot signal failure, and four engines — the
+interpreter, two code generators, and the SMT encoding — have to agree on exactly one answer.
+
+| Operation | Upstream / host | copilot-rs |
+|---|---|---|
+| Integer `/` and `%` by zero | UB in C; panic in Rust | **Zero** |
+| Shift by ≥ the operand width | UB in C; panic or modulo-width in Rust | **Zero** |
+| Float comparison against NaN | False | False, in *every* direction including `<=` and `>=` |
+
+Zero is arbitrary for division, but total. A spec that cares should carry a `Property` stating the
+divisor is non-zero and let the prover discharge it. Shifting is defined as saturating to zero
+rather than Rust's `wrapping_shl`, which reduces the amount modulo the width and would make
+`x << 64` equal `x` — surprising, and not what any spec means.
+
+## 2b. Float operations are evaluated at their operands' width
+
+**Implemented** (M1, `copilot-interp`).
+
+An `f32` operation is computed in `f32`, never in `f64` and rounded afterwards.
+
+For `+`, `-`, `*` and `/` this makes no observable difference: double rounding through a wider
+format is innocuous once the intermediate carries `2p + 2` bits, and `f64`'s 53 clears the 50 that
+single precision needs. But that is a theorem about those four operations, not a property of the
+type, and it fails for the transcendentals — routing `f32::exp` through `f64` changes the result for
+roughly one argument in two thousand (measured: 2391 differing results in 5M random arguments).
+
+Evaluating at the operands' own width means no engine has to know which case an operator falls into.
+Pinned by `f32_operations_are_evaluated_at_f32` in `crates/copilot-interp/tests/semantics.rs`.
 
 ## 3. Equality is restricted to scalars
 
@@ -85,16 +121,22 @@ against `size_of`, and M0's test suite already does so against a hand-written st
 
 ## 6. Array index policy is explicit
 
-**Decided**; not yet implemented (lands with the interpreter and backends in M1–M2).
+**Implemented** (M1, `copilot_core::IndexPolicy`, honoured by the interpreter; backends follow in
+M2).
 
 `Op2::Index` takes a runtime `Word32`, so an out-of-range index is possible. Upstream's C backend
 emits an unchecked subscript, which is undefined behaviour.
 
-copilot-rs will make the policy a codegen option, `IndexPolicy::{ Wrap, Saturate, Assume }`,
-defaulting to `Wrap` — `a[(i as u32 as usize) % N]`, which is constant time, total, and free of both
-panics and UB. `Assume` emits a proof obligation instead, for users who would rather discharge
-in-range-ness than define behaviour outside it. The interpreter and the SMT encoding follow whatever
-the flag says, so all three layers continue to agree.
+copilot-rs makes the policy explicit, defaulting to `Wrap`:
+
+| Policy | Behaviour out of range |
+|---|---|
+| `Wrap` (default) | `a[i % N]` — constant time, no branch, no panic |
+| `Saturate` | `a[min(i, N - 1)]` — one comparison, stays near the intended element |
+| `Assume` | Not defined. Generated code subscripts directly and emits an assumption; the interpreter reports `IndexOutOfRange` rather than agreeing with a monitor whose obligation was never discharged |
+
+Every engine must be configured with the same policy, or the interpreter stops being a valid oracle
+for the generated code — which is why `Monitor::with_policy` takes it explicitly.
 
 ## 7. Struct fields are named, not selected by function
 
@@ -121,3 +163,37 @@ The plan called for an evaluation order over streams in the "compute next" phase
 compute: `Drop` reads only committed buffer state, so no stream's transition expression depends on
 another's within a step, and any order is correct. `copilot_core::reachable` covers what the
 analyses actually needed.
+
+## 10. `drop` applies to any expression, by distributing
+
+**Implemented** (M1, `Builder::shift`).
+
+`drop n` denotes a shift forward in time, and shifting distributes over every pointwise operator:
+`drop n (a + b)` is `drop n a + drop n b`. The frontend implements it by rewriting the expression,
+pushing the shift down to the `Drop` leaves where it becomes a deeper read of a stream's buffer.
+
+So `drop` is available on arbitrary expressions rather than only on stream handles, which is what
+lets `Stream<T>` stay a single type instead of splitting into buffered and unbuffered variants. It
+bottoms out in two places, both reported by `Builder::finish`:
+
+- **an external variable**, whose next sample does not exist yet, at any depth; and
+- **a stream buffered too shallowly** to be read that far ahead.
+
+The rewrite is memoized, because hash-consing means one subexpression can be reached along many
+paths and shifting it once per path would be exponential in the depth of the sharing.
+
+## 11. The frontend's errors are deferred, not returned
+
+**Implemented** (M1).
+
+`a + b` has nowhere to put a `Result`, so the builder records the first error and reports it from
+`finish()`.
+
+This is affordable because almost nothing in the frontend can fail. The marker traits in
+`copilot_lang::classes` stand in for upstream's Haskell class constraints — `Num`, `Integral`,
+`Floating`, `Bits`, `Ord` — so every operator is offered only at the types it is defined for, and a
+spec that compiles is well-typed. What remains is `drop` misuse and invalid identifiers.
+
+The first error is kept rather than the last: later failures are usually consequences of the first,
+and the stand-in handle returned after a failure would otherwise generate a cascade of less
+informative ones.
