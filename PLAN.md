@@ -337,8 +337,14 @@ buffers, no index arithmetic. If both come from the same emitter, the proof only
 equals itself. Enforce it: `ir_step` generation lives in `copilot-verifier` and is forbidden from
 depending on `copilot-rust`, checked by a `cargo deny`-style dependency test.
 
-Scaling: emit one harness per stream group plus one whole-step harness, so large specs can be split
-across `--harness` invocations.
+Scaling: as shipped, one whole-step harness per spec, which is ample for the corpus and keeps the
+proof a single obligation. Per-stream-group splitting across `--harness` invocations is the escape
+hatch if a real spec ever exceeds what CBMC discharges quickly; not needed yet.
+
+*As built (M5):* transcendentals are refused rather than verified against a stub (`libm` calls CBMC
+cannot see through); floats are permitted but slow, so the corpus is integer-first. The independence
+rule is enforced by a manifest-and-tree test, and the reference is itself differential-tested against
+the interpreter, so `ir_step ≈ interpreter` by testing composes with `monitor ≡ ir_step` by proof.
 
 ---
 
@@ -351,7 +357,7 @@ across `--harness` invocations.
 | M2 | **done** | `copilot-rust` backend, `#[derive(CopilotStruct)]`, arrays, layer-1 testing | `proptest` differential green; `size_of::<Monitor>()` matches `resources()` |
 | M3 | **done** | `copilot-libs` (PTLTL, LTL, MTL, clocks, voting, FSM) | Upstream tutorial examples reproduce |
 | M4 | **done** | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
-| M5 | **done** | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on heater + fib; a deliberately broken codegen (phases 3/4 swapped) is caught |
+| M5 | **done** | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on the corpus (fib, lag, an integer thermostat, struct and array specs — floats refused, see below); the phase-3/4 swap and a corrupted commit are caught |
 | M6 | next | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
 | M7 | | `copilot-bluespec` | `bsc` compiles output; bluesim trace matches interpreter |
 
@@ -372,31 +378,59 @@ corpus entry and no longer warns; and the `libm`/`std` split is gone, since the 
 
 ## Verification of this work
 
+These are the real commands, as the crates are actually laid out.
+
 ```bash
-cargo test --workspace                       # unit + typechecker + golden (insta)
-cargo test -p copilot-rust --features differential   # interpreter vs generated Rust, proptest
-cargo run -p copilot --example heater        # prints generated no_std monitor
-cargo test -p copilot --test examples        # tutorial examples end-to-end
-cargo run -p copilot-theorem --bin prove -- examples/heater.rs   # needs z3 or cvc5 on PATH
-cargo kani -p copilot-verifier               # needs kani; layer-3 bisimulation
-bsc -sim -p crates/copilot-bluespec/out ...  # M7 only, when bsc present
+cargo test --workspace                       # everything; ~150 tests
+cargo clippy --workspace --all-targets       # clean, no allows in generated code
+cargo run -p copilot --example heater        # prints the generated no_std monitor
 ```
 
-Negative tests that must exist, because they are what prove the harness has teeth:
+Per-layer, when the optional tool is present (each suite skips cleanly otherwise):
 
-- Swap phases 3 and 4 in the Rust codegen → layer-1 differential **and** `cargo kani` both fail.
-- Change a buffer size without updating the spec → `resources()` test fails.
-- Assert a false property → k-induction returns a counterexample that the interpreter reproduces.
+```bash
+cargo test -p copilot-rust                   # layer 1: interpreter vs generated Rust
+                                             #   differential.rs (golden corpus, proptest inputs),
+                                             #   random_specs.rs (rustc-compiled random specs),
+                                             #   no_std.rs (-D warnings against a libm stub)
+cargo test -p copilot-theorem                # layer 2: SMT k-induction; needs z3 or cvc5 on PATH
+                                             #   prove.rs (proofs + replayable counterexamples),
+                                             #   encoding.rs (encoding vs interpreter, both solvers)
+cargo test -p copilot-verifier --test kani   # layer 3: Kani bisimulation; needs cargo-kani
+                                             #   also runs under `cargo test --workspace`
+# M7, when a Bluespec toolchain is present:
+# bsc -sim -p crates/copilot-bluespec/out ...
+```
+
+The negative tests are the point of the suites, because they are what prove the harness has teeth —
+each is a real, passing test that asserts the *failure*:
+
+- `copilot-rust`: swap the compute/commit phases, or corrupt a buffer index → the differential
+  disagrees with the interpreter. Mutation-checked in the differential's history.
+- `copilot-verifier`: `a_corrupted_commit_is_refuted` and `a_phase_swap_is_refuted` → `cargo kani`
+  finds a counterexample.
+- `copilot-theorem`: a false property → k-induction returns a trace that the interpreter reproduces
+  at the same step (`refutes_a_false_property_with_a_replayable_trace`).
+- `copilot-core`: a drifted cached type or a mis-ordered arena → `typecheck` catches it
+  (`check::corruption`).
 
 ---
 
 ## Risks and open items
 
-- **crates.io naming** — `copilot*` likely taken; settle on a prefix before M2.
-- **Kani scale** — large specs may blow up CBMC. Mitigated by per-stream harness splitting; if it
-  still bites, fall back to proving the hot streams and documenting the residual.
-- **SMT floats** — the `Real`-vs-`FloatingPoint` fork above is a soundness caveat that must be
-  surfaced in the tool's own output, not just the docs.
-- **Bluespec toolchain in CI** — `bsc` is open source but heavy; gate M7 tests behind a feature.
-- **Struct/array frontend ergonomics** — the derive macro is the least certain piece of the
-  frontend; if it drags, ship M2 with scalars and arrays only and defer structs.
+- **crates.io naming** — `copilot*` is likely taken; the crates are unpublished, so this is still
+  open. Settle on a prefix (`copilot-rs-*` with short `[lib] name`s) before the first publish.
+- **Kani scale** — large specs may blow up CBMC. The current harness proves the whole step at once,
+  which is ample for the corpus; per-stream-group splitting is the escape hatch if a real spec bites.
+- **Bluespec toolchain in CI** — *M7, open.* `bsc` is open source but heavy; gate its tests behind a
+  toolchain check the way the solver and Kani suites already gate.
+- **Facade surface** — *M6-adjacent.* The `copilot` facade re-exports only the language crates
+  (core, lang, interp), not the backends or verifier. If the `copilot!` macro or a "batteries
+  included" story wants them, decide the surface then rather than growing it ad hoc.
+
+Resolved since the plan was written:
+
+- **SMT floats** — the real-vs-IEEE fork is surfaced in the tool's own output as a `Caveat`, and
+  `Proof::is_conclusive` is false whenever one applied (M4).
+- **Struct/array frontend ergonomics** — `#[derive(CopilotStruct)]` shipped in M2 with its field
+  accessors, and structs and arrays are in the differential, SMT, and Kani corpora.
