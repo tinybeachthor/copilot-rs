@@ -70,6 +70,7 @@ copilot-rs/
   docs/
     semantics.md             # denotational semantics of the IR
     bisimulation.md          # the proof argument for layer 3
+    macro.md                 # the copilot! macro: syntax, usage, workings
     deviations.md            # where we deliberately differ from Haskell Copilot
 ```
 

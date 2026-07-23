@@ -202,6 +202,9 @@ fn crate_path(input: &DeriveInput) -> syn::Result<Path> {
 
 /// Declarative sugar over `copilot_lang::Builder`.
 ///
+/// `docs/macro.md` in the repository is the long-form guide: the full grammar,
+/// the scoping rules, how expressions are translated, and how it works.
+///
 /// A specification reads as declarations rather than as builder calls, and
 /// expands to exactly those calls — the macro adds no semantics of its own.
 ///

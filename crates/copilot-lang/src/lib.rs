@@ -107,6 +107,9 @@
 //! as well as themselves — [`Builder::declare`] is what that rests on, and is
 //! available directly for the same purpose.
 //!
+//! `docs/macro.md` is the full guide: grammar, scoping, expression translation,
+//! and what the macro does and does not touch.
+//!
 //! # Errors
 //!
 //! Almost nothing here can fail. The marker traits in [`classes`] admit an

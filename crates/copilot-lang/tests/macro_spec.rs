@@ -220,3 +220,43 @@ fn errors_reach_the_caller() {
     };
     assert!(matches!(result, Err(copilot_lang::Error::DropOnExtern(_))));
 }
+
+/// What may refer to what, pinned so `docs/macro.md` states facts.
+///
+/// The expansion emits externs, then every stream declaration, then every
+/// `let`, then every stream body, then the outputs. Two consequences follow,
+/// and neither is obvious from reading a block top to bottom.
+mod scoping {
+    use super::*;
+
+    /// Every `let` is emitted before any stream body, so a body can use one
+    /// that appears further down the block.
+    #[test]
+    fn a_stream_body_may_use_a_later_let() {
+        let spec = copilot! {
+            extern raw: i32;
+            stream held: i32 = [0] ++ scaled;
+            let scaled = raw * 2;
+            observe held;
+        }
+        .unwrap();
+        spec.validate().unwrap();
+    }
+
+    /// Every stream is declared before any `let`, so a binding can use a stream
+    /// that appears further down.
+    #[test]
+    fn a_let_may_use_a_later_stream() {
+        let spec = copilot! {
+            let doubled = counter * 2;
+            stream counter: u32 = [0] ++ counter + 1;
+            observe doubled;
+        }
+        .unwrap();
+        spec.validate().unwrap();
+    }
+
+    // A `let` may *not* use a later `let`: bindings keep their source order, so
+    // that is an ordinary "cannot find value" error. There is no test for it
+    // here because it does not compile, which is the point.
+}
