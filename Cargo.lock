@@ -118,6 +118,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "copilot-verifier"
+version = "0.1.0"
+dependencies = [
+ "copilot-core",
+ "copilot-gen",
+ "copilot-interp",
+ "copilot-lang",
+ "copilot-libs",
+ "copilot-rust",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"

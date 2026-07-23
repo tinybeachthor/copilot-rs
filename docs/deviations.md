@@ -392,3 +392,45 @@ break it silently. The binding is underscored instead, so generated code still c
 The same reasoning applies to `Local` bindings the Rust backend erases: a binding reachable only as
 the bound side of an unused `Local` is emitted and never read, and is underscored rather than
 suppressed with an `allow`.
+
+## 22. The bisimulation reference is a second, independent code generator
+
+**Implemented** (M5, `copilot-verifier`).
+
+Upstream Copilot's verifier (`copilot-verifier`) proves the generated C monitor correct by
+bisimulation against a Crucible model, discharged with an SMT solver. copilot-rs does the same
+against the generated Rust monitor, discharged by Kani (CBMC).
+
+The reference the monitor is proved equal to is deliberately a *different* code generator, in a crate
+that does not depend on `copilot-rust`. It lowers each stream to an explicit time-ordered vector —
+`drop i` is a plain index, commit is a vector shift — where the monitor uses a ring buffer with a
+rotating index. A representation function bridges the two, and Kani proves one step of the monitor
+equals one step of the reference for every state and every input at once. `docs/bisimulation.md` is
+the full argument, including why trace equivalence follows from the single step and why no unwinding
+bound is needed.
+
+Two consequences worth recording:
+
+- **Independence is enforced, not assumed.** `tests/independence.rs` fails if `copilot-rust` ever
+  becomes a library dependency of `copilot-verifier`, because a reference sharing the monitor's
+  lowering would prove only that the generator equals itself.
+- **The reference is itself tested.** `tests/reference.rs` checks it against the interpreter over
+  random specifications, so `ir_step ≈ interpreter` by testing and `monitor ≡ ir_step` by proof, and
+  the two compose.
+
+Transcendental functions are refused (`Error::Transcendental`): they lower to `libm` calls CBMC
+cannot see through. Plain floating-point arithmetic is allowed but slow, so the corpus is
+integer-first.
+
+## 23. `cargo test --workspace` runs the proofs when Kani is present
+
+**Implemented** (M5).
+
+The Kani proofs live in `crates/copilot-verifier/tests/kani.rs` and run as ordinary tests — but each
+shells out to `cargo kani`, so they need it installed. They skip cleanly when it is absent, printing
+a note, so `cargo test --workspace` stays green on a machine without Kani and actually discharges the
+proofs on one with it. Run them deliberately with `cargo test -p copilot-verifier --test kani`.
+
+The negative tests are the point of the suite: a monitor whose commit writes to the wrong ring-buffer
+slot, and a phase-3/4 swap where one stream reads another's committed value, are both refuted. A
+proof harness that cannot fail proves nothing, so these keep it honest.

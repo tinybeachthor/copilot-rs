@@ -1,0 +1,26 @@
+[package]
+name = "copilot-verifier"
+description = "Kani bisimulation harnesses proving a generated monitor implements the IR semantics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Deliberately does NOT depend on copilot-rust. The whole point of the harness
+# is that the reference it checks the monitor against was written by a different
+# code generator; sharing copilot-rust's lowering would prove only that the
+# generator equals itself. `forbids_copilot_rust` in tests/independence.rs keeps
+# this honest.
+[dependencies]
+copilot-core = { path = "../copilot-core", version = "0.1.0" }
+
+[dev-dependencies]
+copilot-interp = { path = "../copilot-interp", version = "0.1.0" }
+copilot-lang = { path = "../copilot-lang", version = "0.1.0" }
+copilot-libs = { path = "../copilot-libs", version = "0.1.0" }
+copilot-gen = { path = "../copilot-gen", version = "0.1.0" }
+copilot-rust = { path = "../copilot-rust", version = "0.1.0" }
+
+[lints]
+workspace = true
