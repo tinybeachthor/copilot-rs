@@ -434,3 +434,48 @@ proofs on one with it. Run them deliberately with `cargo test -p copilot-verifie
 The negative tests are the point of the suite: a monitor whose commit writes to the wrong ring-buffer
 slot, and a phase-3/4 swap where one stream reads another's committed value, are both refuted. A
 proof harness that cannot fail proves nothing, so these keep it honest.
+
+## 24. `copilot!` is sugar over the builder, and that is checkable
+
+**Implemented** (M6, `copilot_macro::copilot`).
+
+Upstream Copilot's surface is a Haskell monadic DSL; the specification *is* the program. copilot-rs's
+primary surface is the builder, with `copilot!` as a declarative layer over it.
+
+The macro adds no semantics of its own — it expands to exactly the builder calls a user would have
+written. That is not a claim to take on trust: `Spec` derives `PartialEq`, and
+`the_heater_desugars_to_the_same_spec` in `crates/copilot-lang/tests/macro_spec.rs` asserts the same
+specification written both ways produces a *literally equal* `Spec` — same arena, same expression
+ids, same order. `spec_equality_can_actually_fail` keeps that assertion from being vacuous by
+changing one constant and requiring the comparison to fail.
+
+Two things the macro translates, because Rust cannot express them directly:
+
+- **Comparisons and boolean connectives.** `a < b` cannot be `PartialOrd`, since comparing two
+  streams yields a *stream* of booleans rather than a `bool`. `< <= > >= == != && ||` become the
+  corresponding methods.
+- **Literals in operand position.** `celsius < 18.0` needs the `18.0` to be a stream too, so bare
+  numeric and boolean literals are lifted where they are operands. They are left alone everywhere
+  else, which is what `counter.drop(1)` needs — `drop` is the one method in the API whose argument
+  is a build-time quantity rather than a stream. String literals are never lifted, so a field or
+  label name passes through.
+
+## 25. Streams can be declared before they are defined
+
+**Implemented** (M6, `Builder::declare` and `Pending`).
+
+`Builder::stream` passes a closure a handle on the stream being defined, which covers
+self-reference. It cannot express *mutual* recursion: two streams that read each other need both
+handles to exist before either body is built — something upstream gets from Haskell's laziness.
+
+`Builder::declare` returns a `Pending` carrying a usable handle, and `Pending::define` installs the
+body later. `stream` is now written in terms of it, and the `copilot!` macro declares every stream in
+a block before defining any, so specifications like
+
+```rust
+stream ping: bool = [false] ++ !pong;
+stream pong: bool = [true]  ++ ping;
+```
+
+work. `define` consumes the `Pending`, so a stream cannot be given two bodies, and one left declared
+but never defined is reported by `Builder::finish`.

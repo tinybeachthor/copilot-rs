@@ -71,6 +71,7 @@ name = "copilot-lang"
 version = "0.1.0"
 dependencies = [
  "copilot-core",
+ "copilot-interp",
  "copilot-macro",
 ]
 

@@ -178,7 +178,11 @@ pub struct StreamDecl {
 
 /// A hash-consed store of expressions, plus the stream, extern, and local
 /// declarations they refer to.
-#[derive(Debug, Clone, Default)]
+///
+/// Comparable, so that two specifications built by different routes — the
+/// builder and the `copilot!` macro, say — can be checked for being literally
+/// the same IR rather than merely behaving alike.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Arena {
     nodes: Vec<Node>,
     types: Vec<Type>,

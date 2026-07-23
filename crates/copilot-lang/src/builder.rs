@@ -74,26 +74,70 @@ impl Builder {
         initial: &[T],
         f: impl FnOnce(Stream<'a, T>) -> Stream<'a, T>,
     ) -> Stream<'a, T> {
+        let pending = self.declare(initial);
+        let handle = pending.stream();
+        let body = f(handle);
+        pending.define(body);
+        handle
+    }
+
+    /// Declares a stream now and defines it later.
+    ///
+    /// [`Builder::stream`] covers self-reference, because the closure receives a
+    /// handle on the stream it is defining. It cannot express *mutual*
+    /// recursion: two streams that read each other need both handles to exist
+    /// before either body is built. Declaring and defining separately is how
+    /// that is written.
+    ///
+    /// ```
+    /// # use copilot_lang::Builder;
+    /// let b = Builder::new();
+    ///
+    /// // Both handles exist before either body is built, so each can read the
+    /// // other.
+    /// let ping = b.declare(&[false]);
+    /// let pong = b.declare(&[true]);
+    /// let (p, q) = (ping.stream(), pong.stream());
+    ///
+    /// ping.define(!q);
+    /// pong.define(p);
+    /// # b.observe("ping", p);
+    /// # b.observe("pong", q);
+    /// # b.finish().unwrap();
+    /// ```
+    ///
+    /// Defining consumes the [`Pending`], so a stream cannot be given two
+    /// bodies; one left declared and never defined is reported by
+    /// [`Builder::finish`].
+    pub fn declare<'a, T: Typed>(&'a self, initial: &[T]) -> Pending<'a, T> {
         let id = match self
             .inner
             .borrow_mut()
             .declare_stream(T::ty(), initial.len())
         {
-            Ok(id) => id,
-            Err(e) => return self.poisoned(e),
+            Ok(id) => Some(id),
+            Err(e) => {
+                self.record(e);
+                None
+            }
         };
 
-        let handle = match self.build(|arena| arena.drop_(0, id)) {
-            Ok(expr) => Stream::new(self, expr),
-            Err(e) => return self.poisoned(e),
+        // A poisoned handle still has to be a `Stream`, so that a caller can go
+        // on building with it and get one error at `finish` rather than a
+        // cascade.
+        let handle = match id {
+            Some(id) => match self.build(|arena| arena.drop_(0, id)) {
+                Ok(expr) => Stream::new(self, expr),
+                Err(e) => self.poisoned(e),
+            },
+            None => self.poison_handle(),
         };
 
-        let body = f(handle);
-        let buffer = initial.iter().copied().map(Typed::lift).collect();
-        self.inner
-            .borrow_mut()
-            .define_stream(id, buffer, body.expr());
-        handle
+        Pending {
+            handle,
+            id,
+            buffer: initial.iter().copied().map(Typed::lift).collect(),
+        }
     }
 
     /// `initial ++ s`: the values of `initial`, then `s` delayed by that many
@@ -229,9 +273,23 @@ impl Builder {
     /// the first — and most informative — one is what [`Builder::finish`]
     /// reports.
     pub(crate) fn poisoned<T>(&self, error: Error) -> Stream<'_, T> {
-        let mut inner = self.inner.borrow_mut();
-        inner.error.get_or_insert(error);
-        let expr = inner
+        self.record(error);
+        self.poison_handle()
+    }
+
+    /// Records an error without producing a handle. The first one wins.
+    pub(crate) fn record(&self, error: Error) {
+        self.inner.borrow_mut().error.get_or_insert(error);
+    }
+
+    /// A stand-in handle for an expression that could not be built.
+    ///
+    /// Building carries on with it so that one mistake yields one error at
+    /// [`Builder::finish`] rather than a cascade of consequences.
+    pub(crate) fn poison_handle<T>(&self) -> Stream<'_, T> {
+        let expr = self
+            .inner
+            .borrow_mut()
             .arena
             .constant(Type::Bool, Value::Bool(false))
             .expect("a boolean literal is always well-typed");
@@ -389,4 +447,46 @@ macro_rules! args {
     ($($arg:expr),* $(,)?) => {
         ::std::vec![$($crate::Stream::expr(&$arg)),*]
     };
+}
+
+/// A stream that has been declared but not yet defined.
+///
+/// Exists so that mutual recursion is expressible: every handle can be created
+/// before any body is built. See [`Builder::declare`].
+#[derive(Debug)]
+pub struct Pending<'a, T> {
+    handle: Stream<'a, T>,
+    /// `None` when the declaration failed; the error is already recorded, and
+    /// defining is then a no-op.
+    id: Option<StreamId>,
+    buffer: Vec<Value>,
+}
+
+impl<'a, T: Typed> Pending<'a, T> {
+    /// A handle on the stream, usable before it is defined.
+    pub fn stream(&self) -> Stream<'a, T> {
+        self.handle
+    }
+
+    /// Installs the stream's transition expression.
+    pub fn define(self, body: Stream<'a, T>) {
+        let Some(id) = self.id else {
+            return;
+        };
+        self.handle
+            .builder()
+            .inner
+            .borrow_mut()
+            .define_stream(id, self.buffer, body.expr());
+    }
+}
+
+impl<'a, T> Clone for Pending<'a, T> {
+    fn clone(&self) -> Self {
+        Pending {
+            handle: self.handle,
+            id: self.id,
+            buffer: self.buffer.clone(),
+        }
+    }
 }

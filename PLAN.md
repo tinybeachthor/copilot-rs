@@ -7,7 +7,7 @@ hard-realtime embedded systems (used by NASA Langley for UAS flight monitoring).
 mutually-recursive infinite streams; the compiler emits a monitor that runs in **constant time and
 constant memory**, and the spec itself is **verifiable** by SMT.
 
-**Status: M0–M5 complete.** See the milestone table below. This document is the plan; decisions taken
+**Status: M0–M6 complete.** See the milestone table below. This document is the plan; decisions taken
 along the way — and the reasons for them — are recorded in [docs/deviations.md](docs/deviations.md),
 which is the living record. Where a sketch below disagrees with the code, the code is right.
 
@@ -358,8 +358,8 @@ the interpreter, so `ir_step ≈ interpreter` by testing composes with `monitor 
 | M3 | **done** | `copilot-libs` (PTLTL, LTL, MTL, clocks, voting, FSM) | Upstream tutorial examples reproduce |
 | M4 | **done** | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
 | M5 | **done** | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on the corpus (fib, lag, an integer thermostat, struct and array specs — floats refused, see below); the phase-3/4 swap and a corrupted commit are caught |
-| M6 | next | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
-| M7 | | `copilot-bluespec` | `bsc` compiles output; bluesim trace matches interpreter |
+| M6 | **done** | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
+| M7 | next | `copilot-bluespec` | `bsc` compiles output; bluesim trace matches interpreter |
 
 M0–M2 is the load-bearing core; M3–M7 are independently shippable and can be reordered.
 
@@ -424,9 +424,9 @@ each is a real, passing test that asserts the *failure*:
   which is ample for the corpus; per-stream-group splitting is the escape hatch if a real spec bites.
 - **Bluespec toolchain in CI** — *M7, open.* `bsc` is open source but heavy; gate its tests behind a
   toolchain check the way the solver and Kani suites already gate.
-- **Facade surface** — *M6-adjacent.* The `copilot` facade re-exports only the language crates
-  (core, lang, interp), not the backends or verifier. If the `copilot!` macro or a "batteries
-  included" story wants them, decide the surface then rather than growing it ad hoc.
+- **Facade surface** — the `copilot` facade re-exports the language crates (core, lang, interp) and
+  the `copilot!` macro, not the backends or verifier. Those are used as their own crates. Revisit
+  only if a "batteries included" story needs them.
 
 Resolved since the plan was written:
 

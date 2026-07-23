@@ -11,5 +11,8 @@ repository.workspace = true
 copilot-core = { path = "../copilot-core", version = "0.1.0" }
 copilot-macro = { path = "../copilot-macro", version = "0.1.0" }
 
+[dev-dependencies]
+copilot-interp = { path = "../copilot-interp", version = "0.1.0" }
+
 [lints]
 workspace = true

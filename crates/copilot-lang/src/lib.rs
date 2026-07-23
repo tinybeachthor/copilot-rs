@@ -78,6 +78,35 @@
 //! [`Stream`] belongs to this crate, and only a type's own crate may add
 //! inherent methods to it.
 //!
+//! # The `copilot!` macro
+//!
+//! [`copilot!`] writes the same specifications as declarations rather than as
+//! builder calls. It is sugar and nothing more — it expands to exactly the
+//! calls you would have written, which is what
+//! `tests/macro_spec.rs` checks by comparing the two for equality:
+//!
+//! ```
+//! use copilot_lang::copilot;
+//!
+//! let spec = copilot! {
+//!     extern temperature: f32;
+//!
+//!     let celsius = temperature * 0.5 - 30.0;
+//!     stream heating: bool = [false] ++
+//!         (celsius < 18.0).mux(true, (celsius > 21.0).mux(false, heating));
+//!
+//!     observe celsius;
+//!     trigger heat_on(celsius) when celsius < 18.0 && !heating;
+//!     property never_both = !(celsius < 18.0 && celsius > 21.0);
+//! }?;
+//! # assert_eq!(spec.streams.len(), 1);
+//! # Ok::<(), copilot_lang::Error>(())
+//! ```
+//!
+//! Streams are declared before any body is built, so they may read each other
+//! as well as themselves — [`Builder::declare`] is what that rests on, and is
+//! available directly for the same purpose.
+//!
 //! # Errors
 //!
 //! Almost nothing here can fail. The marker traits in [`classes`] admit an
@@ -93,8 +122,8 @@ mod error;
 mod ops;
 mod stream;
 
-pub use builder::Builder;
-pub use copilot_macro::CopilotStruct;
+pub use builder::{Builder, Pending};
+pub use copilot_macro::{CopilotStruct, copilot};
 pub use error::{Error, Result};
 pub use stream::Stream;
 

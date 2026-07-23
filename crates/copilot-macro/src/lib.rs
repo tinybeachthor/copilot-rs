@@ -1,6 +1,9 @@
-//! Derive macros for copilot-rs.
+//! Macros for copilot-rs.
 //!
-//! See [`CopilotStruct`].
+//! [`CopilotStruct`] makes a Rust struct usable as a stream type;
+//! [`copilot`] is declarative sugar over the builder.
+
+mod spec;
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
@@ -195,4 +198,69 @@ fn crate_path(input: &DeriveInput) -> syn::Result<Path> {
         })?;
     }
     Ok(path)
+}
+
+/// Declarative sugar over `copilot_lang::Builder`.
+///
+/// A specification reads as declarations rather than as builder calls, and
+/// expands to exactly those calls — the macro adds no semantics of its own.
+///
+/// ```ignore
+/// let spec = copilot! {
+///     extern temperature: f32;
+///
+///     stream counter: u64 = [0] ++ counter + 1;
+///     let celsius = temperature * 0.5 - 30.0;
+///
+///     observe celsius;
+///     trigger heat_on(celsius) when celsius < 18.0;
+///     property bounded = counter < 1000;
+/// }?;
+/// ```
+///
+/// # Items
+///
+/// | Form | Means |
+/// |---|---|
+/// | `extern name: Ty;` | a value the environment supplies each step |
+/// | `stream name: Ty = [a, b] ++ body;` | `body` preceded by the initial values, upstream's `++` |
+/// | `let name = expr;` | a named expression, not buffered |
+/// | `observe name;` / `observe name = expr;` | sample a value every step |
+/// | `trigger name(args..) when guard;` | call a handler while `guard` holds |
+/// | `property name = expr;` | a claim for the prover; `property exists name = ..` for the existential form |
+///
+/// Streams are declared before any body is built, so they may refer to each
+/// other as well as to themselves.
+///
+/// # Expressions
+///
+/// Bodies are ordinary Rust expressions over the names in scope, so arithmetic,
+/// bitwise operators and method calls work as written. Two things are
+/// translated:
+///
+/// - `< <= > >= == != && ||` become the stream methods, because comparing two
+///   streams yields a stream of booleans rather than a `bool` and so cannot be
+///   `PartialOrd`.
+/// - A bare literal used as an operand is lifted into a stream, so
+///   `celsius < 18.0` works. Literals elsewhere are left alone, which is what
+///   `counter.drop(1)` and `history.index(i)` need.
+///
+/// # Crate path
+///
+/// Generated code refers to `::copilot_lang`. A crate that reaches the language
+/// through a facade should say so, since a macro cannot see how it was
+/// reached:
+///
+/// ```ignore
+/// copilot! {
+///     #![crate(::copilot)]
+///     // ..
+/// }
+/// ```
+#[proc_macro]
+pub fn copilot(input: TokenStream) -> TokenStream {
+    match spec::parse(input) {
+        Ok(block) => spec::expand(block).into(),
+        Err(e) => e.to_compile_error().into(),
+    }
 }

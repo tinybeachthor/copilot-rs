@@ -99,7 +99,7 @@ pub struct Property {
 /// succeeds — the constructors below derive types from the arena, and the
 /// validators re-derive them independently, so a disagreement is caught rather
 /// than propagated into a backend.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Spec {
     /// The expressions this spec is built from.
     pub arena: Arena,
