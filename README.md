@@ -192,4 +192,4 @@ is the remaining milestone. See [PLAN.md](PLAN.md).
 
 ## License
 
-BSD-3-Clause, matching upstream Copilot.
+[BSD-3-Clause](LICENSE), matching upstream Copilot.
