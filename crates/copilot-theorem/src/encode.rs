@@ -472,11 +472,10 @@ impl<'a> Encoding<'a> {
             // Square root is exactly rounded, so IEEE mode can express it;
             // everything else transcendental cannot be expressed in either
             // theory and becomes an uninterpreted function.
-            Op1::Sqrt(ty) if self.settings.floats == FloatEncoding::Ieee => {
+            Op1::Sqrt(_) if self.settings.floats == FloatEncoding::Ieee => {
                 format!("(fp.sqrt RNE {a})")
             }
-            Op1::Ceiling(ty) if self.settings.floats == FloatEncoding::Ieee => {
-                let _ = ty;
+            Op1::Ceiling(_) if self.settings.floats == FloatEncoding::Ieee => {
                 format!("(fp.roundToIntegral RTP {a})")
             }
             Op1::Floor(_) if self.settings.floats == FloatEncoding::Ieee => {

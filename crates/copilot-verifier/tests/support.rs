@@ -99,6 +99,62 @@ pub fn kani_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether to skip for want of Kani.
+///
+/// `COPILOT_REQUIRE_KANI` turns the skip into a failure. CI sets it on the job
+/// that installs Kani, so the proofs cannot quietly stop running — a
+/// bisimulation suite that skips is indistinguishable from one that passes.
+pub fn skip_without_kani() -> bool {
+    decide_skip(
+        kani_available(),
+        std::env::var_os("COPILOT_REQUIRE_KANI").is_some(),
+    )
+}
+
+/// The skip decision, with both inputs passed in so it can be tested.
+///
+/// Neither input can be arranged from a test otherwise: `cargo` searches
+/// `$CARGO_HOME/bin` for subcommands as well as `PATH`, so removing Kani from
+/// `PATH` does not make `cargo kani` unavailable, and setting an environment
+/// variable is `unsafe` under edition 2024 — which this workspace forbids. The
+/// decision is the part that matters, and taking its inputs as arguments makes
+/// it checkable without either trick.
+fn decide_skip(available: bool, required: bool) -> bool {
+    if available {
+        return false;
+    }
+    assert!(
+        !required,
+        "cargo kani is not installed and COPILOT_REQUIRE_KANI is set"
+    );
+    eprintln!("skipping: cargo kani is not installed");
+    true
+}
+
+#[cfg(test)]
+mod guard {
+    use super::decide_skip;
+
+    #[test]
+    fn present_means_run() {
+        assert!(!decide_skip(true, false));
+        assert!(!decide_skip(true, true));
+    }
+
+    #[test]
+    fn absent_and_optional_means_skip() {
+        assert!(decide_skip(false, false));
+    }
+
+    /// The branch CI depends on: absent but required must fail, so a job that
+    /// was supposed to install Kani cannot pass having quietly run nothing.
+    #[test]
+    #[should_panic(expected = "COPILOT_REQUIRE_KANI is set")]
+    fn absent_but_required_means_fail() {
+        decide_skip(false, true);
+    }
+}
+
 /// The outcome of running Kani on a harness.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {

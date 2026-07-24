@@ -6,9 +6,18 @@ use copilot_lang::{Builder, Spec};
 use copilot_theorem::{Caveat, FloatEncoding, Outcome, Settings, Solver, prove};
 
 /// Skips a test when no solver is installed, rather than failing.
+///
+/// Setting `COPILOT_REQUIRE_SOLVER` turns the skip into a failure. CI sets it,
+/// because a suite that skips silently is a suite that can go green while
+/// proving nothing — which for a prover is the worst way to be wrong.
 macro_rules! require_solver {
     ($settings:expr) => {
         if !$settings.solver.available() {
+            assert!(
+                ::std::env::var_os("COPILOT_REQUIRE_SOLVER").is_none(),
+                "`{}` is not on PATH and COPILOT_REQUIRE_SOLVER is set",
+                $settings.solver.program()
+            );
             eprintln!("skipping: `{}` is not on PATH", $settings.solver.program());
             return;
         }
@@ -52,6 +61,11 @@ fn both_solvers_agree() {
             ..Settings::default()
         };
         if !solver.available() {
+            assert!(
+                std::env::var_os("COPILOT_REQUIRE_SOLVER").is_none(),
+                "`{}` is not on PATH and COPILOT_REQUIRE_SOLVER is set",
+                solver.program()
+            );
             eprintln!("skipping {}: not on PATH", solver.program());
             continue;
         }

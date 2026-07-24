@@ -9,7 +9,7 @@ mod support;
 
 use copilot_rust::{Settings as RustSettings, generate};
 use copilot_verifier::{Settings, generate_harness};
-use support::{Verdict, corpus, kani_available, run_kani};
+use support::{Verdict, corpus, run_kani, skip_without_kani};
 
 fn harness_for(spec: &copilot_core::Spec) -> String {
     let monitor = generate(spec, &RustSettings::default()).expect("monitor must generate");
@@ -23,8 +23,7 @@ fn harness_for(spec: &copilot_core::Spec) -> String {
 /// bound — `step` is loop-free, so CBMC's unrolling is exact.
 #[test]
 fn every_corpus_monitor_is_verified() {
-    if !kani_available() {
-        eprintln!("skipping: cargo kani is not installed");
+    if skip_without_kani() {
         return;
     }
 
@@ -43,8 +42,7 @@ fn every_corpus_monitor_is_verified() {
 /// be worthless.
 #[test]
 fn a_corrupted_commit_is_refuted() {
-    if !kani_available() {
-        eprintln!("skipping: cargo kani is not installed");
+    if skip_without_kani() {
         return;
     }
 
@@ -78,8 +76,7 @@ fn a_corrupted_commit_is_refuted() {
 /// committed first the follower sees its next value and the lag vanishes.
 #[test]
 fn a_phase_swap_is_refuted() {
-    if !kani_available() {
-        eprintln!("skipping: cargo kani is not installed");
+    if skip_without_kani() {
         return;
     }
 

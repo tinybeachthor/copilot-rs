@@ -71,10 +71,19 @@ fn agrees_on(seed: u64, settings: &Settings, config: &Config, steps: usize) -> R
     Ok(())
 }
 
+/// Whether to skip for want of a solver.
+///
+/// `COPILOT_REQUIRE_SOLVER` turns the skip into a failure, so CI cannot go
+/// green having quietly checked nothing.
 fn skip_without_solver(settings: &Settings) -> bool {
     if settings.solver.available() {
         return false;
     }
+    assert!(
+        std::env::var_os("COPILOT_REQUIRE_SOLVER").is_none(),
+        "`{}` is not on PATH and COPILOT_REQUIRE_SOLVER is set",
+        settings.solver.program()
+    );
     eprintln!("skipping: `{}` is not on PATH", settings.solver.program());
     true
 }

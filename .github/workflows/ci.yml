@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes the older run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Cargo caps lints for dependencies, so this applies to this workspace only.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: format, lints, docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        run: cargo clippy --workspace --all-targets --locked
+
+      # Generated code is documented as compiling clean in the user's own build,
+      # and the crates carry `missing_docs = warn`; both are only true if this
+      # stays green.
+      - name: Documentation
+        run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  test:
+    name: tests (z3 + cvc5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install z3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends z3
+
+      # Pinned rather than "latest": a silently changing solver would make a
+      # failure hard to attribute. Bumping it is a visible commit.
+      - name: Install cvc5
+        env:
+          CVC5_VERSION: "1.3.4"
+        run: |
+          set -euo pipefail
+          asset="cvc5-Linux-x86_64-static"
+          curl -fsSL -o cvc5.zip \
+            "https://github.com/cvc5/cvc5/releases/download/cvc5-${CVC5_VERSION}/${asset}.zip"
+          unzip -q cvc5.zip
+          sudo install -m 0755 "${asset}/bin/cvc5" /usr/local/bin/cvc5
+
+      - name: Solver versions
+        run: |
+          z3 --version
+          cvc5 --version | head -1
+
+      # COPILOT_REQUIRE_SOLVER turns the suites' "no solver, skipping" path into
+      # a failure. Without it a missing solver would leave the SMT encoding and
+      # the k-induction prover untested while the job went green — which for a
+      # verification tool is the worst possible way to be wrong.
+      #
+      # The Kani proofs skip here and run in their own job below.
+      - name: Tests
+        run: cargo test --workspace --locked
+        env:
+          COPILOT_REQUIRE_SOLVER: 1
+
+  msrv:
+    name: minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Read the version from the manifest rather than repeating it here, so
+      # the two cannot drift.
+      - name: Read rust-version
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "manifest declares Rust $version"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: cargo check --workspace --all-targets --locked
+
+  embedded:
+    name: generated monitor on bare metal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+
+      # The `no_std` test in copilot-rust compiles generated code for the host,
+      # which shows it needs nothing from `std`. This shows it builds for a
+      # machine that has no `std` to begin with — the claim the project actually
+      # makes.
+      - name: Emit a monitor crate
+        run: cargo run -q -p copilot-rust --example emit_crate --locked -- "$RUNNER_TEMP/monitor"
+
+      - name: Cross-compile it for Cortex-M4F
+        run: >
+          cargo build
+          --manifest-path "$RUNNER_TEMP/monitor/Cargo.toml"
+          --target thumbv7em-none-eabihf
+
+  kani:
+    name: bisimulation proofs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # `cargo kani setup` fetches a toolchain and CBMC, which is most of this
+      # job's runtime.
+      - name: Cache the Kani installation
+        uses: actions/cache@v4
+        with:
+          path: ~/.kani
+          key: kani-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: kani-${{ runner.os }}-
+
+      - name: Install Kani
+        run: |
+          set -euo pipefail
+          if ! cargo kani --version >/dev/null 2>&1; then
+            cargo install --locked kani-verifier
+            cargo kani setup
+          fi
+          cargo kani --version
+
+      # These prove the generated monitor bisimulates an independent reference,
+      # and refuse two deliberately broken monitors. COPILOT_REQUIRE_KANI makes
+      # a missing Kani a failure rather than a silent skip: a proof suite that
+      # skips is indistinguishable from one that passes.
+      - name: Proofs
+        run: cargo test -p copilot-verifier --test kani --locked
+        env:
+          COPILOT_REQUIRE_KANI: 1

@@ -5,7 +5,9 @@ members = ["crates/copilot-core", "crates/copilot-lang", "crates/copilot-interp"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# Let-chains, used in copilot-core, copilot-rust and copilot-theorem, are
+# stable only from 1.88 under edition 2024. Checked by the `msrv` CI job.
+rust-version = "1.88"
 license = "BSD-3-Clause"
 repository = "https://github.com/tinybeachthor/copilot-rs"
 
