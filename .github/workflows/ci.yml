@@ -136,22 +136,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # `cargo kani setup` fetches a toolchain and CBMC, which is most of this
-      # job's runtime.
-      - name: Cache the Kani installation
-        uses: actions/cache@v4
-        with:
-          path: ~/.kani
-          key: kani-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: kani-${{ runner.os }}-
-
+      # Deliberately uncached, and `setup` runs unconditionally.
+      #
+      # `cargo kani setup` puts a bundle in ~/.kani whose toolchain is a link
+      # into ~/.rustup, which this job reinstalls from scratch each run. Caching
+      # ~/.kani alone therefore restores a dangling link, and the failure is
+      # `cargo metadata` not starting — nothing that names the cache. Guarding
+      # the setup on the binary already existing makes it worse, because
+      # rust-cache does cache ~/.cargo/bin, so the guard skips exactly the step
+      # that would have repaired the link.
+      #
+      # The whole install takes about fifteen seconds, so there is nothing to
+      # win here anyway.
       - name: Install Kani
         run: |
           set -euo pipefail
-          if ! cargo kani --version >/dev/null 2>&1; then
-            cargo install --locked kani-verifier
-            cargo kani setup
-          fi
+          cargo install --locked kani-verifier
+          cargo kani setup
           cargo kani --version
 
       # These prove the generated monitor bisimulates an independent reference,
