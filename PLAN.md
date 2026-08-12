@@ -56,13 +56,17 @@ asserts the reported number equals `size_of::<Monitor>()` for every example.
 ```
 copilot-rs/
   Cargo.toml                 # workspace
+  README.md                  # what the project is, and what enforces each objective
+  LICENSE                    # BSD-3-Clause, matching upstream Copilot
+  .github/workflows/ci.yml   # lints, tests, MSRV, bare-metal build, Kani proofs
   crates/
     copilot-core/            # IR: types, values, ops, arena, Spec, typechecker, analyses
     copilot-lang/            # builder frontend: Stream<T>, operators, externs, triggers
     copilot-macro/           # #[derive(CopilotStruct)]  (+ copilot! sugar in M6)
     copilot-interp/          # constant-memory reference evaluator
+    copilot-gen/             # random well-typed Spec generation, for the differential suites
     copilot-rust/            # no_std Rust codegen backend
-    copilot-bluespec/        # Bluespec (.bs) codegen backend
+    copilot-bluespec/        # Bluespec (.bs) codegen backend            (M7, not yet created)
     copilot-libs/            # PTLTL, LTL, MTL, clocks, voting, state machines
     copilot-theorem/         # SMT-LIB2 lowering + k-induction driver (z3 / cvc5)
     copilot-verifier/        # Kani bisimulation harness generation
@@ -74,8 +78,13 @@ copilot-rs/
     deviations.md            # where we deliberately differ from Haskell Copilot
 ```
 
+`copilot-gen` is not in the original plan. Random specification generation is a dev-dependency of
+three suites — `copilot-rust`, `copilot-theorem`, and `copilot-verifier` — so it lives in its own
+crate, depending only on `copilot-core`, `copilot-lang`, and `copilot-interp` and on no backend.
+
 Crate names on crates.io are likely contested; publish as `copilot-rs-core` etc. with `[lib] name`
-kept short. Decide before M2, it only costs a `package.name` line.
+kept short. Still undecided, and no longer urgent — nothing is published, and the cost stays one
+`package.name` line per crate. Settle it before the first publish; see Risks.
 
 ---
 
@@ -97,8 +106,10 @@ pub trait Typed: Copy + 'static { fn ty() -> Type; fn lift(self) -> Value; }
 // impls for bool, i8..i64, u8..u64, f32, f64, [T; N] (const generic), derive for structs
 ```
 
-Expressions live in a hash-consed arena; `ExprId` is a `u32` index, so the IR is `Clone`, `Send`,
-serializable, and cycle-free without `Rc`.
+Expressions live in a hash-consed arena; `ExprId` is a `u32` index, so the IR is `Clone`, `Send`, and
+cycle-free without `Rc` — and is a flat table of plain data, so serializing it would be mechanical.
+No `serde` impls exist and nothing has needed them; the property is a consequence of the
+representation, not a shipped feature.
 
 ```rust
 pub enum Node {
@@ -132,7 +143,8 @@ pub struct Spec     { arena: Arena, streams: Vec<Stream>, observers: Vec<Observe
 Core passes, all in `copilot-core` so every backend and the verifier share them:
 
 - `typecheck(&Spec) -> Result<(), TypeError>` — the frontend's `Stream<T>` makes ill-typed IR
-  unconstructible, but the macro path and any deserialized `Spec` need this. It is also the
+  unconstructible, but a hand-built `Spec` is not so constrained, and neither is the arena itself: it
+  is what catches a drifted cached type or a mis-ordered arena (`check::corruption`). It is also the
   precondition every backend and proof assumes.
 - `wellformed(&Spec)` — every `Drop { idx, stream }` satisfies `idx < buffer.len()`; no empty
   buffers; no zero-length arrays or empty structs (upstream rejects both); no `Exists` reaching a
@@ -382,9 +394,10 @@ corpus entry and no longer warns; and the `libm`/`std` split is gone, since the 
 These are the real commands, as the crates are actually laid out.
 
 ```bash
-cargo test --workspace                       # everything; ~150 tests
+cargo test --workspace                       # everything; 178 tests
 cargo clippy --workspace --all-targets       # clean, no allows in generated code
-cargo run -p copilot --example heater        # prints the generated no_std monitor
+cargo run -p copilot --example heater        # footprint + per-step cost, then a driven trace
+cargo run -p copilot-rust --example emit_crate -- DIR   # writes a generated monitor crate to DIR
 ```
 
 Per-layer, when the optional tool is present (each suite skips cleanly otherwise):
