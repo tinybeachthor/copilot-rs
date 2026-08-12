@@ -264,9 +264,58 @@ Getting 3 and 4 backwards is the classic bug; it is exactly what the Kani harnes
 ### `copilot-bluespec` (M7)
 
 Emits `.bs` (Bluespec Classic), mirroring upstream's naming: module name doubles as file prefix,
-`BluespecSettings { output_directory }`. Buffers → `Vector#(n, Reg#(t))`, the step → a rule or an
-`Action` method, externs → `ActionValue` methods on an interface, triggers → `Action` methods.
-Validate with `bsc` + `bluesim` in CI when the toolchain is present, golden files otherwise.
+`BluespecSettings { output_directory }`. Buffers → `Vector#(n, Reg#(t))`, the step → one rule or one
+`Action` method — singular, for reasons below — externs → `ActionValue` methods on an interface,
+triggers → `Action` methods.
+
+`copilot-rust` was specified here down to the field order of its state struct. The same is owed to
+the second backend, because hardware does not merely re-render the Rust — it changes what each of the
+three objectives means. Six things to settle before writing the emitter; check upstream's
+`copilot-bluespec` first on each, since it faced all of them.
+
+**The four phases mostly collapse, and that is the thing to verify.** A rule's register writes land at
+the end of the cycle and reads inside it see the values from the start, so "evaluate from the current
+buffers, then commit" is not a discipline the backend imposes — it is what `Reg` already means.
+Phases 3 and 4 are inseparable inside one rule, and the phase-swap bug the Kani harness exists to
+catch is not expressible. The obligation moves rather than disappearing: it becomes *everything is
+in one rule*, since two rules could be scheduled in either order and the reads in the second would
+see the first's writes. Phase 2 is where the real care goes — triggers are `Action` methods, so their
+spec order becomes an ordering constraint on actions within the rule, not a statement sequence.
+
+**`cost()` becomes area, not time.** The per-step operation count predicts combinational logic and
+critical-path depth. The step is one cycle by construction, so the realtime objective is met
+trivially and the question that replaces it — does the emitted logic close timing at the target
+clock? — is one only `bsc` can answer. `resources()` still denotes something real (register bits),
+but there is no `#[repr(C)]` to make it falsifiable and no `size_of` to compare against; the honest
+check is against `bsc`'s own area report. If that cannot be automated, the footprint claim for this
+backend is weaker than M2's and the docs must say so rather than reprint a number nothing verifies.
+
+**`%` is a divider.** Index advance and `IndexPolicy::Wrap` both lower to modulo, which is one
+instruction in Rust and, for a non-power-of-two modulus, a divider on the critical path in hardware.
+For index advance there is an exact escape and it should be taken: `idx == N-1 ? 0 : idx+1`, which is
+what a hand-written monitor would do. A runtime `Index` under `Wrap` has no such escape — it needs
+either power-of-two array lengths or `IndexPolicy::Assume`, and which one is a user-visible
+restriction that belongs in `deviations.md`.
+
+**Floats are out of scope for M7.** `FloatingPoint#(e,m)` is a library type, and nothing in it
+corresponds to the `libm` transcendentals the Rust backend calls; matching those bit for bit in
+hardware is the actual blocker, and it is the same reason M5 refuses transcendentals rather than
+verifying them against a stub. Restrict to bool and integer specs, and reject floats at `generate()`
+with an error that names the restriction — the corpus is already integer-first for M5.
+
+**Verification reaches layers 1 and 2, not 3.** Layer 3 is Kani over Rust; there is no CBMC for
+Bluespec. The generated hardware gets differential testing against the interpreter, and it inherits
+the layer-2 proofs for free because those are statements about the `Spec`, not about any backend —
+but there is no bisimulation. This is the one place the second backend is strictly weaker than the
+first, and it needs a `deviations.md` entry, or "verifiable" spreads to it by association.
+
+**Testing, concretely.** Golden `.bs` files under `crates/copilot-bluespec/tests/golden/`, rewritten
+with `UPDATE_GOLDEN=1`, same as M2. The differential follows `random_specs.rs`, not `differential.rs`:
+`.bs` cannot be `include!`-ed, so it is emit → `bsc -sim` → `bluesim` → compare printed events
+against the interpreter, batching specs into one toolchain invocation the way the `rustc` harness
+does. The testbench takes its trace as a `Vector` of samples indexed by a cycle counter and `$display`s
+observers and fired triggers in a format the harness parses. Gate on `bsc` with `COPILOT_REQUIRE_BSC`
+in CI, per the Risks entry.
 
 ---
 
@@ -292,9 +341,12 @@ constant memory is preserved:
 - `proptest` strategy generating **well-typed** random `Spec`s (generate against `Type`, not
   post-filter) plus random extern traces. Run interpreter vs generated Rust over N steps and assert
   identical observer values and trigger call sequences.
-- Generated Rust is `include!`-ed into a test crate at build time and executed in-process — fast
-  enough to run per-commit, unlike shelling out to a C compiler.
-- `insta` snapshots of generated Rust and Bluespec so codegen churn is visible in review.
+- The generated Rust for each corpus spec is checked in under `crates/copilot-rust/tests/golden/` and
+  `include!`-ed into the test binary, so the differential runs in-process on every commit with no
+  `rustc` subprocess. Random specs, which do not exist until test time, do shell out (`random_specs.rs`).
+- Those same golden files are the codegen-churn diff — a plain checked-in-output test, rewritten with
+  `UPDATE_GOLDEN=1`, rather than a snapshot library. Being ordinary `.rs` files is what lets the
+  differential compile them; a snapshot format could not do double duty.
 - Examples from the upstream tutorial (heater, engine monitor, voting) as end-to-end cases.
 
 ### Layer 2 — `copilot-theorem`: SMT + k-induction (M4)
@@ -375,7 +427,7 @@ the interpreter, so `ir_step ≈ interpreter` by testing composes with `monitor 
 | M4 | **done** | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
 | M5 | **done** | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on the corpus (fib, lag, an integer thermostat, struct and array specs — floats refused, see below); the phase-3/4 swap and a corrupted commit are caught |
 | M6 | **done** | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
-| M7 | next | `copilot-bluespec` | `bsc` compiles output; bluesim trace matches interpreter |
+| M7 | next | `copilot-bluespec` | `bsc` compiles the integer corpus; bluesim events match the interpreter; golden `.bs` checked in; floats refused by name, not miscompiled |
 
 M0–M2 is the load-bearing core; M3–M7 are independently shippable and can be reordered.
 
