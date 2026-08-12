@@ -35,7 +35,8 @@ Decisions taken with the user:
 
 ## How each design objective is mechanized
 
-Not aspirations — each one gets an artifact that fails CI when violated.
+Not aspirations — each one gets an artifact that fails CI when violated. The jobs that do the failing
+are listed in [What CI enforces](#what-ci-enforces).
 
 **Realtime (constant time).** The IR has no recursion, no unbounded loops, no allocation. Array
 indexing is the only variable-cost-looking op and is `O(1)` by construction. `Spec::cost()` returns
@@ -45,7 +46,9 @@ inflates WCET shows up as a diff.
 **Constant memory.** `Spec::resources()` computes exact static footprint:
 `Σ_streams (buffer_len × sizeof(ty)) + Σ index words + max temporaries`. The generated Rust is
 `#![no_std]` with no `alloc` dependency and no `unsafe`, so the footprint is the whole story. A test
-asserts the reported number equals `size_of::<Monitor>()` for every example.
+asserts the reported number equals `size_of::<Monitor>()` for every example, and the `embedded` CI
+job cross-compiles a generated monitor for `thumbv7em-none-eabihf` — a target with no `std` to fall
+back on, which is the claim actually being made.
 
 **Verifiable.** Three layers, detailed in [Verification](#verification-three-layers).
 
@@ -428,6 +431,39 @@ each is a real, passing test that asserts the *failure*:
 - `copilot-core`: a drifted cached type or a mis-ordered arena → `typecheck` catches it
   (`check::corruption`).
 
+### What CI enforces
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) — five jobs, on every push to `main` and every
+pull request, with a newer push cancelling the older run. `RUSTFLAGS: -D warnings` applies to this
+workspace only, since Cargo caps lints for dependencies. Every cargo invocation is `--locked`, so a
+run checks the committed lockfile rather than whatever resolved that morning.
+
+| Job | Runs | Because |
+|---|---|---|
+| `check` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS: -D warnings` | Generated code is documented as compiling clean in the *user's* build, and the crates carry `missing_docs = warn`. Both are claims only while this is green. |
+| `test` | `cargo test --workspace` with z3 and cvc5 installed, `COPILOT_REQUIRE_SOLVER=1` | The whole suite, layers 1 and 2, against both solvers. Kani skips here and gets its own job. |
+| `msrv` | `cargo check --workspace --all-targets` on the toolchain named by `rust-version` | `rust-version = 1.88`: let-chains under edition 2024, used in `copilot-core`, `copilot-rust` and `copilot-theorem`. The job reads the version out of the manifest rather than repeating it, so the two cannot drift. |
+| `embedded` | `emit_crate` → `cargo build --target thumbv7em-none-eabihf` | The constant-memory objective, checked on a machine that has no `std` at all rather than on a host that merely went unused; see below. |
+| `kani` | `cargo test -p copilot-verifier --test kani`, `COPILOT_REQUIRE_KANI=1` | Layer 3. The `test` job skips the proofs; they run here, with a Kani install of their own, so the rest of the suite reports without waiting on CBMC. |
+
+Three decisions in there are load-bearing, and each is the sort of thing that quietly rots:
+
+**A skipped suite must be a failure.** Locally the optional layers skip cleanly, so `cargo test
+--workspace` is green on a bare checkout with no solver and no Kani — which is right for a
+contributor and wrong for CI. `COPILOT_REQUIRE_SOLVER` and `COPILOT_REQUIRE_KANI` turn the skip path
+into an error. A verification suite that skips is indistinguishable from one that passes, and for
+this project that is the worst available way to be wrong.
+
+**`no_std` is tested twice, differently.** `no_std.rs` compiles generated code for the *host*
+against a `libm` stub, which shows the code needs nothing from `std`. The `embedded` job builds it
+for a machine that *has* no `std`. The first can pass on a target where the second fails.
+
+**Solvers are pinned, Kani is not cached.** cvc5 is fixed at 1.3.4 rather than tracking latest,
+because a silently changing solver makes a failure hard to attribute; bumping it is a visible commit.
+Kani is installed from scratch every run: `cargo kani setup` writes a bundle whose toolchain is a
+symlink into `~/.rustup`, which the job reinstalls, so caching `~/.kani` restores a dangling link and
+the failure names nothing that suggests the cache. It takes about fifteen seconds.
+
 ---
 
 ## Risks and open items
@@ -437,7 +473,9 @@ each is a real, passing test that asserts the *failure*:
 - **Kani scale** — large specs may blow up CBMC. The current harness proves the whole step at once,
   which is ample for the corpus; per-stream-group splitting is the escape hatch if a real spec bites.
 - **Bluespec toolchain in CI** — *M7, open.* `bsc` is open source but heavy; gate its tests behind a
-  toolchain check the way the solver and Kani suites already gate.
+  toolchain check the way the solver and Kani suites already gate — which means a
+  `COPILOT_REQUIRE_BSC` alongside the gate, and its own job, or M7 ships with a suite that is green
+  because it never ran.
 - **Facade surface** — the `copilot` facade re-exports the language crates (core, lang, interp) and
   the `copilot!` macro, not the backends or verifier. Those are used as their own crates. Revisit
   only if a "batteries included" story needs them.
