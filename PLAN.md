@@ -35,17 +35,30 @@ Decisions taken with the user:
 
 ## How each design objective is mechanized
 
-Not aspirations — each one gets an artifact that fails CI when violated.
+Not aspirations — each one gets an artifact that fails CI when violated. The jobs that do the failing
+are listed in [What CI enforces](#what-ci-enforces).
 
 **Realtime (constant time).** The IR has no recursion, no unbounded loops, no allocation. Array
 indexing is the only variable-cost-looking op and is `O(1)` by construction. `Spec::cost()` returns
 a per-step operation count broken down by type; a golden test pins it, so a spec change that
 inflates WCET shows up as a diff.
 
+The precise claim, since "realtime" invites a stronger reading: a step's work is a function of the
+specification alone, never of the data — which is why trigger arguments are evaluated whether or not
+their guard fires (`deviations.md` §13). That is what is enforced. What is *not* measured is time.
+`cost()` counts operations, weighted by how expensive each class is on an embedded target, and no
+benchmark converts that to cycles on any real part. Nothing here is a WCET tool, and the number
+should never be quoted as one: it is an exact, comparable proxy whose value is that it cannot drift
+silently, not that it predicts nanoseconds. A user needing a WCET bound runs their own analysis on
+the generated monitor, which is loop-free and allocation-free precisely so that such a tool has an
+easy job.
+
 **Constant memory.** `Spec::resources()` computes exact static footprint:
 `Σ_streams (buffer_len × sizeof(ty)) + Σ index words + max temporaries`. The generated Rust is
 `#![no_std]` with no `alloc` dependency and no `unsafe`, so the footprint is the whole story. A test
-asserts the reported number equals `size_of::<Monitor>()` for every example.
+asserts the reported number equals `size_of::<Monitor>()` for every example, and the `embedded` CI
+job cross-compiles a generated monitor for `thumbv7em-none-eabihf` — a target with no `std` to fall
+back on, which is the claim actually being made.
 
 **Verifiable.** Three layers, detailed in [Verification](#verification-three-layers).
 
@@ -56,13 +69,18 @@ asserts the reported number equals `size_of::<Monitor>()` for every example.
 ```
 copilot-rs/
   Cargo.toml                 # workspace
+  README.md                  # what the project is, and what enforces each objective
+  LICENSE                    # BSD-3-Clause, matching upstream Copilot
+  CHANGELOG.md               # (M9, not yet created)
+  .github/workflows/ci.yml   # lints, tests, MSRV, bare-metal build, Kani proofs
   crates/
     copilot-core/            # IR: types, values, ops, arena, Spec, typechecker, analyses
     copilot-lang/            # builder frontend: Stream<T>, operators, externs, triggers
     copilot-macro/           # #[derive(CopilotStruct)]  (+ copilot! sugar in M6)
     copilot-interp/          # constant-memory reference evaluator
+    copilot-gen/             # random well-typed Spec generation, for the differential suites
     copilot-rust/            # no_std Rust codegen backend
-    copilot-bluespec/        # Bluespec (.bs) codegen backend
+    copilot-bluespec/        # Bluespec (.bs) codegen backend            (M7, not yet created)
     copilot-libs/            # PTLTL, LTL, MTL, clocks, voting, state machines
     copilot-theorem/         # SMT-LIB2 lowering + k-induction driver (z3 / cvc5)
     copilot-verifier/        # Kani bisimulation harness generation
@@ -74,8 +92,13 @@ copilot-rs/
     deviations.md            # where we deliberately differ from Haskell Copilot
 ```
 
+`copilot-gen` is not in the original plan. Random specification generation is a dev-dependency of
+three suites — `copilot-rust`, `copilot-theorem`, and `copilot-verifier` — so it lives in its own
+crate, depending only on `copilot-core`, `copilot-lang`, and `copilot-interp` and on no backend.
+
 Crate names on crates.io are likely contested; publish as `copilot-rs-core` etc. with `[lib] name`
-kept short. Decide before M2, it only costs a `package.name` line.
+kept short. Still undecided, and no longer urgent — nothing is published, and the cost stays one
+`package.name` line per crate. Settle it before the first publish; see Risks.
 
 ---
 
@@ -97,8 +120,10 @@ pub trait Typed: Copy + 'static { fn ty() -> Type; fn lift(self) -> Value; }
 // impls for bool, i8..i64, u8..u64, f32, f64, [T; N] (const generic), derive for structs
 ```
 
-Expressions live in a hash-consed arena; `ExprId` is a `u32` index, so the IR is `Clone`, `Send`,
-serializable, and cycle-free without `Rc`.
+Expressions live in a hash-consed arena; `ExprId` is a `u32` index, so the IR is `Clone`, `Send`, and
+cycle-free without `Rc` — and is a flat table of plain data, so serializing it would be mechanical.
+No `serde` impls exist and nothing has needed them; the property is a consequence of the
+representation, not a shipped feature.
 
 ```rust
 pub enum Node {
@@ -132,7 +157,8 @@ pub struct Spec     { arena: Arena, streams: Vec<Stream>, observers: Vec<Observe
 Core passes, all in `copilot-core` so every backend and the verifier share them:
 
 - `typecheck(&Spec) -> Result<(), TypeError>` — the frontend's `Stream<T>` makes ill-typed IR
-  unconstructible, but the macro path and any deserialized `Spec` need this. It is also the
+  unconstructible, but a hand-built `Spec` is not so constrained, and neither is the arena itself: it
+  is what catches a drifted cached type or a mis-ordered arena (`check::corruption`). It is also the
   precondition every backend and proof assumes.
 - `wellformed(&Spec)` — every `Drop { idx, stream }` satisfies `idx < buffer.len()`; no empty
   buffers; no zero-length arrays or empty structs (upstream rejects both); no `Exists` reaching a
@@ -249,9 +275,63 @@ Getting 3 and 4 backwards is the classic bug; it is exactly what the Kani harnes
 ### `copilot-bluespec` (M7)
 
 Emits `.bs` (Bluespec Classic), mirroring upstream's naming: module name doubles as file prefix,
-`BluespecSettings { output_directory }`. Buffers → `Vector#(n, Reg#(t))`, the step → a rule or an
-`Action` method, externs → `ActionValue` methods on an interface, triggers → `Action` methods.
-Validate with `bsc` + `bluesim` in CI when the toolchain is present, golden files otherwise.
+`BluespecSettings { output_directory }`. Buffers → `Vector#(n, Reg#(t))`, the step → one rule or one
+`Action` method — singular, for reasons below — externs → `ActionValue` methods on an interface,
+triggers → `Action` methods.
+
+`copilot-rust` was specified here down to the field order of its state struct. The same is owed to
+the second backend, because hardware does not merely re-render the Rust — it changes what each of the
+three objectives means. Six things to settle before writing the emitter; check upstream's
+`copilot-bluespec` first on each, since it faced all of them.
+
+**The four phases mostly collapse, and that is the thing to verify.** A rule's register writes land at
+the end of the cycle and reads inside it see the values from the start, so "evaluate from the current
+buffers, then commit" is not a discipline the backend imposes — it is what `Reg` already means.
+Phases 3 and 4 are inseparable inside one rule, and the phase-swap bug the Kani harness exists to
+catch is not expressible. The obligation moves rather than disappearing: it becomes *everything is
+in one rule*, since two rules could be scheduled in either order and the reads in the second would
+see the first's writes. Phase 2 is where the real care goes — triggers are `Action` methods, so their
+spec order becomes an ordering constraint on actions within the rule, not a statement sequence.
+
+**`cost()` becomes area, not time.** The per-step operation count predicts combinational logic and
+critical-path depth. The step is one cycle by construction, so the realtime objective is met
+trivially and the question that replaces it — does the emitted logic close timing at the target
+clock? — is one only `bsc` can answer. `resources()` still denotes something real (register bits),
+but there is no `#[repr(C)]` to make it falsifiable and no `size_of` to compare against; the honest
+check is against `bsc`'s own area report. If that cannot be automated, the footprint claim for this
+backend is weaker than M2's and the docs must say so rather than reprint a number nothing verifies.
+
+**`%` is a divider.** Index advance and `IndexPolicy::Wrap` both lower to modulo, which is one
+instruction in Rust and, for a non-power-of-two modulus, a divider on the critical path in hardware.
+For index advance there is an exact escape and it should be taken: `idx == N-1 ? 0 : idx+1`, which is
+what a hand-written monitor would do. A runtime `Index` under `Wrap` has no such escape — it needs
+either power-of-two array lengths or `IndexPolicy::Assume`, and which one is a user-visible
+restriction that belongs in `deviations.md`.
+
+**Floats are out of scope for M7 — and here we are behind upstream, not ahead.** Upstream's
+`copilot-bluespec` 4.8 supports them; it depends on `fp-ieee` and `ieee754`, and 4.7.1 specifically
+fixed its handling of special float values. So this is not a hardware limitation to discover, it is
+work not being done yet. The blocker on our side is narrower than floats in general: nothing in
+`FloatingPoint#(e,m)` corresponds to the `libm` transcendentals the Rust backend calls, and the
+differential compares numbers, not just which function was called — the same reason M5 refuses
+transcendentals rather than verifying them against a stub. Ship M7 restricted to bool and integer
+specs, rejecting floats at `generate()` with an error that names the restriction and says it is
+temporary; the corpus is already integer-first from M5. Lifting it is a follow-up, and upstream's
+implementation is the reference.
+
+**Verification reaches layers 1 and 2, not 3.** Layer 3 is Kani over Rust; there is no CBMC for
+Bluespec. The generated hardware gets differential testing against the interpreter, and it inherits
+the layer-2 proofs for free because those are statements about the `Spec`, not about any backend —
+but there is no bisimulation. This is the one place the second backend is strictly weaker than the
+first, and it needs a `deviations.md` entry, or "verifiable" spreads to it by association.
+
+**Testing, concretely.** Golden `.bs` files under `crates/copilot-bluespec/tests/golden/`, rewritten
+with `UPDATE_GOLDEN=1`, same as M2. The differential follows `random_specs.rs`, not `differential.rs`:
+`.bs` cannot be `include!`-ed, so it is emit → `bsc -sim` → `bluesim` → compare printed events
+against the interpreter, batching specs into one toolchain invocation the way the `rustc` harness
+does. The testbench takes its trace as a `Vector` of samples indexed by a cycle counter and `$display`s
+observers and fired triggers in a format the harness parses. Gate on `bsc` with `COPILOT_REQUIRE_BSC`
+in CI, per the Risks entry.
 
 ---
 
@@ -277,9 +357,12 @@ constant memory is preserved:
 - `proptest` strategy generating **well-typed** random `Spec`s (generate against `Type`, not
   post-filter) plus random extern traces. Run interpreter vs generated Rust over N steps and assert
   identical observer values and trigger call sequences.
-- Generated Rust is `include!`-ed into a test crate at build time and executed in-process — fast
-  enough to run per-commit, unlike shelling out to a C compiler.
-- `insta` snapshots of generated Rust and Bluespec so codegen churn is visible in review.
+- The generated Rust for each corpus spec is checked in under `crates/copilot-rust/tests/golden/` and
+  `include!`-ed into the test binary, so the differential runs in-process on every commit with no
+  `rustc` subprocess. Random specs, which do not exist until test time, do shell out (`random_specs.rs`).
+- Those same golden files are the codegen-churn diff — a plain checked-in-output test, rewritten with
+  `UPDATE_GOLDEN=1`, rather than a snapshot library. Being ordinary `.rs` files is what lets the
+  differential compile them; a snapshot format could not do double duty.
 - Examples from the upstream tutorial (heater, engine monitor, voting) as end-to-end cases.
 
 ### Layer 2 — `copilot-theorem`: SMT + k-induction (M4)
@@ -349,6 +432,34 @@ the interpreter, so `ir_step ≈ interpreter` by testing composes with `monitor 
 
 ---
 
+## Parity with upstream
+
+"A Rust port of Copilot" needs a completion criterion, or it stays subjective. Upstream ships as a
+family of `copilot-*` packages, so the criterion is the family: every package either has a
+counterpart here or an entry in `deviations.md` saying why it never will. Checked against Hackage at
+upstream 4.8 (2026-08-12):
+
+| Upstream 4.8 | Here | |
+|---|---|---|
+| `copilot-core` | `copilot-core` | done, plus the typechecker and analyses upstream has no need for |
+| `copilot-language` | `copilot-lang` | done |
+| — | `copilot-macro` | ours: `copilot!` and `#[derive(CopilotStruct)]`, doing what Haskell gets from `do` notation and type classes |
+| `copilot-libraries` | `copilot-libs` | done (M3) |
+| `copilot-interpreter` | `copilot-interp` | done |
+| `copilot-theorem` | `copilot-theorem` | done (M4). Upstream drives What4; we emit SMT-LIB2 down a pipe |
+| `copilot-verifier` | `copilot-verifier` | done (M5). Upstream is Crucible over LLVM against the C99 output; ours is CBMC-via-Kani against the Rust output. Same bisimulation argument, different machinery |
+| `copilot-bluespec` | `copilot-bluespec` | **M7**, and behind: upstream supports floats, we will not at first |
+| `copilot-c99` | — | deliberate, `deviations.md` §8 |
+| `copilot-prettyprinter` | — | **gap.** Nothing here prints a `Spec` |
+| `copilot` | `copilot` | done, though the facade re-exports less; see Risks |
+| — | `copilot-gen` | ours: random well-typed specs, which upstream has no equivalent of |
+
+Two rows are open, and only one is a surprise. `copilot-prettyprinter` exposes a single module,
+`Copilot.PrettyPrint`, and it was never in this plan — the plan went straight from an IR to three
+backends without noticing that a user who writes a spec has no way to *look* at one. That matters
+more here than upstream, because `copilot!` desugars invisibly and `Local` erasure and hash-consing
+both rewrite what the user wrote. M8.
+
 ## Milestones
 
 | # | Status | Deliverable | Done when |
@@ -360,9 +471,11 @@ the interpreter, so `ir_step ≈ interpreter` by testing composes with `monitor 
 | M4 | **done** | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
 | M5 | **done** | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on the corpus (fib, lag, an integer thermostat, struct and array specs — floats refused, see below); the phase-3/4 swap and a corrupted commit are caught |
 | M6 | **done** | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
-| M7 | next | `copilot-bluespec` | `bsc` compiles output; bluesim trace matches interpreter |
+| M7 | next | `copilot-bluespec` | `bsc` compiles the integer corpus; bluesim events match the interpreter; golden `.bs` checked in; floats refused by name, not miscompiled |
+| M8 | after M7 | `Spec` pretty-printer, closing the last parity gap | Every corpus spec round-trips to text a reader can check against the source; the `copilot!` desugaring is inspectable; counterexamples print as specs, not model dumps |
+| M9 | last | First publish | Names settled, `CHANGELOG.md`, the semver surface written down (see below), docs.rs green |
 
-M0–M2 is the load-bearing core; M3–M7 are independently shippable and can be reordered.
+M0–M2 is the load-bearing core; M3–M8 are independently shippable and can be reordered.
 
 Carried forward, to do before the milestone that depends on it:
 
@@ -375,6 +488,57 @@ in-crate corruption tests, which M5's soundness argument rests on; `Local` erasu
 corpus entry and no longer warns; and the `libm`/`std` split is gone, since the interpreter now uses
 `libm` too.
 
+### M8 — printing a `Spec`
+
+Upstream keeps its pretty-printer in its own package because it wants the `pretty` library. We have
+no such reason: every crate here already depends on `copilot-core`, and core is deliberately
+dependency-free. So this is a module in `copilot-core`, not a tenth crate — a `Display` for `Spec`
+plus a way to print one expression, hand-written.
+
+Three callers make it worth doing, and they constrain the format:
+
+- **Reading what `copilot!` produced.** The macro desugars invisibly, `Local` bindings are erased,
+  and hash-consing rewrites structure. `docs/macro.md` currently explains the translation; printing
+  the result *shows* it, and M6's "desugars to an identical `Spec`" test could assert on text rather
+  than on graph equality.
+- **Counterexamples.** M4 already replays a failing model through the interpreter so the user sees a
+  trace. Printing the spec beside it closes the loop from model dump to something a person reads.
+- **Review.** Golden `.rs` and `.bs` files show what the *backends* did; nothing shows what the
+  frontend built.
+
+The format should follow the source, not the arena: `Drop` back to `drop n s`, shared subexpressions
+named rather than duplicated, and struct and array literals as written. Round-tripping to a parser is
+explicitly *not* a goal — that is a second frontend to keep in sync, and the `copilot!` macro already
+occupies that niche.
+
+### M9 — publishing
+
+Nothing here is on crates.io, and the plan has never said what publishing would commit us to.
+
+**Names.** `copilot-rs-*` with short `[lib] name`s, so `use copilot_core::…` keeps working. Decide
+once, in one commit, across all crates.
+
+**Versions in lockstep**, as upstream does — all its packages sit at 4.8, and its inter-package
+bounds are exact ranges. The workspace already shares one `version` and the path dependencies already
+carry it, so this costs nothing and avoids a matrix of compatible pairs.
+
+**The semver surface is larger than the Rust API**, and this is the part worth writing down before
+the first publish rather than discovering after it. A user depends on three things:
+
+1. The crates' Rust APIs, as usual.
+2. **The generated code's interface** — `Env` and `Handler` method names, `Monitor` field names and
+   layout, `new`, `step`. Renaming a generated trait method breaks every user's code while changing
+   no signature in any of our crates. The golden files are the de facto record of this surface, so a
+   golden diff is a semver signal and should be read as one in review.
+3. **The semantics in `deviations.md`** — index policy, wrapping, totality. Changing what a monitor
+   *computes* is the most breaking change available here and the least visible in a diff.
+
+**MSRV bumps are semver-visible**; the `msrv` job pins the claim, and moving it is a minor bump at
+minimum.
+
+**Also needed:** a `CHANGELOG.md` (there is none), and docs.rs, which should be free — `cargo doc
+--workspace --no-deps` already runs under `-D warnings` in CI.
+
 ---
 
 ## Verification of this work
@@ -382,9 +546,10 @@ corpus entry and no longer warns; and the `libm`/`std` split is gone, since the 
 These are the real commands, as the crates are actually laid out.
 
 ```bash
-cargo test --workspace                       # everything; ~150 tests
+cargo test --workspace                       # everything; 178 tests
 cargo clippy --workspace --all-targets       # clean, no allows in generated code
-cargo run -p copilot --example heater        # prints the generated no_std monitor
+cargo run -p copilot --example heater        # footprint + per-step cost, then a driven trace
+cargo run -p copilot-rust --example emit_crate -- DIR   # writes a generated monitor crate to DIR
 ```
 
 Per-layer, when the optional tool is present (each suite skips cleanly otherwise):
@@ -415,19 +580,58 @@ each is a real, passing test that asserts the *failure*:
 - `copilot-core`: a drifted cached type or a mis-ordered arena → `typecheck` catches it
   (`check::corruption`).
 
+### What CI enforces
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) — five jobs, on every push to `main` and every
+pull request, with a newer push cancelling the older run. `RUSTFLAGS: -D warnings` applies to this
+workspace only, since Cargo caps lints for dependencies. Every cargo invocation is `--locked`, so a
+run checks the committed lockfile rather than whatever resolved that morning.
+
+| Job | Runs | Because |
+|---|---|---|
+| `check` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS: -D warnings` | Generated code is documented as compiling clean in the *user's* build, and the crates carry `missing_docs = warn`. Both are claims only while this is green. |
+| `test` | `cargo test --workspace` with z3 and cvc5 installed, `COPILOT_REQUIRE_SOLVER=1` | The whole suite, layers 1 and 2, against both solvers. Kani skips here and gets its own job. |
+| `msrv` | `cargo check --workspace --all-targets` on the toolchain named by `rust-version` | `rust-version = 1.88`: let-chains under edition 2024, used in `copilot-core`, `copilot-rust` and `copilot-theorem`. The job reads the version out of the manifest rather than repeating it, so the two cannot drift. |
+| `embedded` | `emit_crate` → `cargo build --target thumbv7em-none-eabihf` | The constant-memory objective, checked on a machine that has no `std` at all rather than on a host that merely went unused; see below. |
+| `kani` | `cargo test -p copilot-verifier --test kani`, `COPILOT_REQUIRE_KANI=1` | Layer 3. The `test` job skips the proofs; they run here, with a Kani install of their own, so the rest of the suite reports without waiting on CBMC. |
+
+Three decisions in there are load-bearing, and each is the sort of thing that quietly rots:
+
+**A skipped suite must be a failure.** Locally the optional layers skip cleanly, so `cargo test
+--workspace` is green on a bare checkout with no solver and no Kani — which is right for a
+contributor and wrong for CI. `COPILOT_REQUIRE_SOLVER` and `COPILOT_REQUIRE_KANI` turn the skip path
+into an error. A verification suite that skips is indistinguishable from one that passes, and for
+this project that is the worst available way to be wrong.
+
+**`no_std` is tested twice, differently.** `no_std.rs` compiles generated code for the *host*
+against a `libm` stub, which shows the code needs nothing from `std`. The `embedded` job builds it
+for a machine that *has* no `std`. The first can pass on a target where the second fails.
+
+**Solvers are pinned, Kani is not cached.** cvc5 is fixed at 1.3.4 rather than tracking latest,
+because a silently changing solver makes a failure hard to attribute; bumping it is a visible commit.
+Kani is installed from scratch every run: `cargo kani setup` writes a bundle whose toolchain is a
+symlink into `~/.rustup`, which the job reinstalls, so caching `~/.kani` restores a dangling link and
+the failure names nothing that suggests the cache. It takes about fifteen seconds.
+
 ---
 
 ## Risks and open items
 
 - **crates.io naming** — `copilot*` is likely taken; the crates are unpublished, so this is still
-  open. Settle on a prefix (`copilot-rs-*` with short `[lib] name`s) before the first publish.
+  open. Settle on a prefix (`copilot-rs-*` with short `[lib] name`s) as part of M9.
 - **Kani scale** — large specs may blow up CBMC. The current harness proves the whole step at once,
   which is ample for the corpus; per-stream-group splitting is the escape hatch if a real spec bites.
 - **Bluespec toolchain in CI** — *M7, open.* `bsc` is open source but heavy; gate its tests behind a
-  toolchain check the way the solver and Kani suites already gate.
+  toolchain check the way the solver and Kani suites already gate — which means a
+  `COPILOT_REQUIRE_BSC` alongside the gate, and its own job, or M7 ships with a suite that is green
+  because it never ran.
 - **Facade surface** — the `copilot` facade re-exports the language crates (core, lang, interp) and
   the `copilot!` macro, not the backends or verifier. Those are used as their own crates. Revisit
-  only if a "batteries included" story needs them.
+  only if a "batteries included" story needs them — and settle it before M9, since narrowing a
+  facade after publishing is a breaking change and widening one is not.
+- **Upstream keeps moving** — the parity table is pinned to 4.8, checked 2026-08-12. 4.7.1 added
+  state machines to `copilot-libraries`, which M3 picked up; the next release may add something
+  similar. Re-check the table at M9 rather than tracking continuously.
 
 Resolved since the plan was written:
 
