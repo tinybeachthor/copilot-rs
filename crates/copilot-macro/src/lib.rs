@@ -246,7 +246,7 @@ fn crate_path(input: &DeriveInput) -> syn::Result<Path> {
 ///   `PartialOrd`.
 /// - A bare literal used as an operand is lifted into a stream, so
 ///   `celsius < 18.0` works. Literals elsewhere are left alone, which is what
-///   `counter.drop(1)` and `history.index(i)` need.
+///   `counter.after(1)` and `history.index(i)` need.
 ///
 /// # Crate path
 ///

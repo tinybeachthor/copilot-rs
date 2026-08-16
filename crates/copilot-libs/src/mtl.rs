@@ -23,7 +23,7 @@ use copilot_lang::Stream;
 ///
 /// Rust evaluates arguments before the call it passes them to, so writing these
 /// recursions the way upstream's lazy Haskell does would build the shifted
-/// streams even on the step that discards them. That is one `drop` further than
+/// streams even on the step that discards them. That is one `after` further than
 /// the window reaches — an error outright when the argument came from an
 /// external variable — and, for the past-time operators, a buffered stream the
 /// monitor would carry and never read.
@@ -97,7 +97,7 @@ fn eventually_from<'a, T: ClockType>(
     let here = bounds.lower.le(c) & s;
     let later = step(
         k,
-        || eventually_from(c.drop(1), s.drop(1), bounds, k - 1),
+        || eventually_from(c.after(1), s.after(1), bounds, k - 1),
         b.lit(false),
     );
     c.le(bounds.upper) & (here | later)
@@ -128,7 +128,7 @@ fn always_from<'a, T: ClockType>(
     let here = bounds.lower.le(c).implies(s);
     let later = step(
         k,
-        || always_from(c.drop(1), s.drop(1), bounds, k - 1),
+        || always_from(c.after(1), s.after(1), bounds, k - 1),
         b.lit(true),
     );
     c.gt(bounds.upper) | (here & later)
@@ -162,7 +162,7 @@ fn until_from<'a, T: ClockType>(
     let later = s0
         & step(
             k,
-            || until_from(c.drop(1), s0.drop(1), s1.drop(1), bounds, k - 1),
+            || until_from(c.after(1), s0.after(1), s1.after(1), bounds, k - 1),
             b.lit(false),
         );
     c.le(bounds.upper) & (released | later)
@@ -181,7 +181,7 @@ pub fn release<'a, T: ClockType>(
 ) -> Stream<'a, bool> {
     let bounds = Bounds::ahead(clock, l, u);
     let outside = bounds.lower.gt(clock) | clock.gt(bounds.upper) | s1;
-    let rest = release_from(clock.drop(1), s0, s1.drop(1), &bounds, depth(u, dist) - 1);
+    let rest = release_from(clock.after(1), s0, s1.after(1), &bounds, depth(u, dist) - 1);
     outside & rest
 }
 
@@ -200,7 +200,7 @@ fn release_from<'a, T: ClockType>(
     let stop = s0;
     let later = step(
         k,
-        || release_from(c.drop(1), s0.drop(1), s1.drop(1), bounds, k - 1),
+        || release_from(c.after(1), s0.after(1), s1.after(1), bounds, k - 1),
         b.lit(true),
     );
     here & (stop | later)

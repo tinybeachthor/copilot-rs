@@ -71,27 +71,27 @@ impl<'a, T: Typed> Stream<'a, T> {
     /// ```
     /// # use copilot_lang::Builder;
     /// let b = Builder::new();
-    /// let fib = b.stream([1u64, 1], |s| s.drop(1) + s);
+    /// let fib = b.stream([1u64, 1], |s| s.after(1) + s);
     /// # b.finish().unwrap();
     /// ```
-    pub fn drop(self, n: u32) -> Stream<'a, T> {
+    pub fn after(self, n: u32) -> Stream<'a, T> {
         match self.builder.shift(self.expr, n) {
             Ok(expr) => Stream::new(self.builder, expr),
             Err(e) => self.builder.poisoned(e),
         }
     }
 
-    /// This stream's current value — `drop(0)` under a name that doesn't
+    /// This stream's current value — `after(0)` under a name that doesn't
     /// suggest a shift.
     ///
     /// ```
     /// # use copilot_lang::Builder;
     /// let b = Builder::new();
-    /// let fib = b.stream([1u64, 1], |s| s.drop(1) + s.read());
+    /// let fib = b.stream([1u64, 1], |s| s.after(1) + s.now());
     /// # b.finish().unwrap();
     /// ```
-    pub fn read(self) -> Stream<'a, T> {
-        self.drop(0)
+    pub fn now(self) -> Stream<'a, T> {
+        self.after(0)
     }
 
     /// Annotates the expression with a name, for generated code to carry as a

@@ -54,7 +54,7 @@ impl Builder {
     /// # use copilot_lang::Builder;
     /// let b = Builder::new();
     /// let counter = b.stream([0u64], |s| s + 1u64);
-    /// let fib = b.stream([1u64, 1], |s| s.drop(1) + s);
+    /// let fib = b.stream([1u64, 1], |s| s.after(1) + s);
     /// # b.finish().unwrap();
     /// ```
     pub fn stream<'a, T: Typed, const N: usize>(
@@ -228,7 +228,7 @@ impl Builder {
     /// syntax stays usable: `a + b` has nowhere to put a `Result`. Almost
     /// nothing can fail — the marker traits in [`crate::classes`] make every
     /// operator well-typed by construction — so in practice this reports a
-    /// misuse of [`Stream::drop`] or a name that is not a valid identifier.
+    /// misuse of [`Stream::after`] or a name that is not a valid identifier.
     pub fn finish(self) -> Result<Spec> {
         let inner = self.inner.into_inner();
         if let Some(error) = inner.error {
@@ -298,11 +298,11 @@ impl Builder {
 
     /// Shifts an expression forward in time by `by` steps.
     ///
-    /// `drop i` distributes over every operator — `drop i (a + b)` is
-    /// `drop i a + drop i b` — so it is implemented by pushing the shift down
-    /// to the `Drop` leaves, where it becomes a deeper read of a stream's
-    /// buffer. That is why it applies to arbitrary expressions and not only to
-    /// stream handles.
+    /// `after i` distributes over every operator — `after i (a + b)` is
+    /// `after i a + after i b` — so it is implemented by pushing the shift
+    /// down to the `Drop` leaves, where it becomes a deeper read of a
+    /// stream's buffer. That is why it applies to arbitrary expressions and
+    /// not only to stream handles.
     ///
     /// It bottoms out at an external variable, whose future value is not
     /// available at any depth, and at a stream buffered too shallowly to be
@@ -400,7 +400,7 @@ fn shift(
             }
         }
 
-        Node::ExternVar { name, .. } => return Err(Error::DropOnExtern(name)),
+        Node::ExternVar { name, .. } => return Err(Error::AfterOnExtern(name)),
         Node::Var(_) => expr,
         Node::Local { var, bound, body } => {
             let bound = shift(arena, definitions, bound, by, memo)?;

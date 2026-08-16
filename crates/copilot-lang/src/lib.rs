@@ -39,13 +39,13 @@
 //! # use copilot_lang::Builder;
 //! let b = Builder::new();
 //! let counter = b.stream([0u64], |s| s + 1u64);
-//! let fib = b.stream([1u64, 1], |s| s.drop(1) + s);
+//! let fib = b.stream([1u64, 1], |s| s.after(1) + s);
 //! # b.finish().unwrap();
 //! ```
 //!
-//! `s.drop(n)` reads `n` steps ahead, which a stream can answer as far as its
-//! buffer reaches — `fib` buffers two values, so `drop(1)` is available and
-//! `drop(2)` is not.
+//! `s.after(n)` reads `n` steps ahead, which a stream can answer as far as its
+//! buffer reaches — `fib` buffers two values, so `after(1)` is available and
+//! `after(2)` is not.
 //!
 //! # Structs
 //!

@@ -63,15 +63,15 @@ generated code.
 
 `[a, b] ++ body` is upstream Copilot's notation, and means the same thing: the
 stream's first values are `a, b`, and every value after them is `body`. The
-buffer length is what a monitor's memory costs and what `drop` can reach:
+buffer length is what a monitor's memory costs and what `after` can reach:
 
 ```rust
 stream counter: u64 = [0]    ++ counter + 1;      // 0, 1, 2, 3, ..
-stream fib:     u64 = [1, 1] ++ fib.drop(1) + fib; // 1, 1, 2, 3, 5, ..
+stream fib:     u64 = [1, 1] ++ fib.after(1) + fib; // 1, 1, 2, 3, 5, ..
 ```
 
-`fib.drop(1)` is the stream one step ahead — readable only because `fib`
-buffered two values. See `docs/semantics.md` for what `drop` means.
+`fib.after(1)` is the stream one step ahead — readable only because `fib`
+buffered two values. See `docs/semantics.md` for what `after` means.
 
 ### `trigger`
 
@@ -117,11 +117,11 @@ boolean literal used as an *operand* is lifted with `Builder::lit`. Literals
 anywhere else are left alone, which is what makes this work:
 
 ```rust
-observe ahead = fib.drop(1);   // `1` stays a plain number
+observe ahead = fib.after(1);  // `1` stays a plain number
 observe large = fib > 100;     // `100` becomes a stream
 ```
 
-`drop` is the only method in the API whose argument is a build-time quantity —
+`after` is the only method in the API whose argument is a build-time quantity —
 how far to shift — rather than a value that varies over time, so it is the only
 one whose arguments are left unlifted. Everywhere else (`mux`, `index`, the
 shifts, the comparisons) a literal argument is lifted, so `p.mux(true, false)`
@@ -213,9 +213,9 @@ the `Result`, exactly as they do from `Builder::finish`:
 ```rust
 let result = copilot! {
     extern raw: u32;
-    observe ahead = raw.drop(1);   // an external variable has no future
+    observe ahead = raw.after(1);   // an external variable has no future
 };
-assert!(matches!(result, Err(copilot_lang::Error::DropOnExtern(_))));
+assert!(matches!(result, Err(copilot_lang::Error::AfterOnExtern(_))));
 ```
 
 ## The crate path

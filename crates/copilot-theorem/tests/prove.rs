@@ -148,7 +148,7 @@ fn distinguishes_not_inductive_from_false() {
 ///
 /// The stream's transition expression is the stream itself, so its two initial
 /// values rotate forever — `false, true, false, true, ..`. Writing the
-/// transition as `s.drop(1)` instead would make it constant after the prefix,
+/// transition as `s.after(1)` instead would make it constant after the prefix,
 /// which is a mistake the prover catches rather than a property it proves.
 #[test]
 fn proves_a_property_over_a_deep_buffer() {
@@ -159,7 +159,7 @@ fn proves_a_property_over_a_deep_buffer() {
     let alternating = b.stream([false, true], |s| s);
     b.observe("alternating", alternating);
     // Exactly one of this step and the next is true, always.
-    b.property_forall("alternates", alternating ^ alternating.drop(1));
+    b.property_forall("alternates", alternating ^ alternating.after(1));
     let spec = b.finish().unwrap();
 
     let proofs = prove(&spec, &settings).unwrap();
@@ -178,9 +178,9 @@ fn refutes_a_stream_that_only_looks_alternating() {
     require_solver!(settings);
 
     let b = Builder::new();
-    let settles = b.stream([false, true], |s| s.drop(1));
+    let settles = b.stream([false, true], |s| s.after(1));
     b.observe("settles", settles);
-    b.property_forall("alternates", settles ^ settles.drop(1));
+    b.property_forall("alternates", settles ^ settles.after(1));
     let spec = b.finish().unwrap();
 
     let proofs = prove(&spec, &settings).unwrap();
@@ -336,7 +336,7 @@ mod libraries {
         let b = Builder::new();
         let tick = copilot_libs::clocks::clk(&b, 3, 0).unwrap();
         b.observe("tick", tick);
-        b.property_forall("no_two_in_a_row", !(tick & tick.drop(1)));
+        b.property_forall("no_two_in_a_row", !(tick & tick.after(1)));
         let spec = b.finish().unwrap();
 
         let proofs = prove(&spec, &settings).unwrap();

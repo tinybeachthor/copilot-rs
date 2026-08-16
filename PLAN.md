@@ -200,7 +200,7 @@ without cyclic ownership:
 let mut b = Builder::new();
 
 let ctr  = b.stream([0u64],  |s| s + 1u64);            // [0] ++ (ctr + 1)
-let fib  = b.stream([1u64, 1], |s| s.drop(1) + s);     // [1,1] ++ (drop 1 fib + fib)
+let fib  = b.stream([1u64, 1], |s| s.after(1) + s);    // [1,1] ++ (after 1 fib + fib)
 
 let temp = b.extern_::<f32>("temperature");
 let ctemp = (temp * 9.0 / 5.0) + 32.0;
