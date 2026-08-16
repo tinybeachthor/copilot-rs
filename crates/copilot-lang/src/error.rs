@@ -12,20 +12,20 @@ pub enum Error {
     /// An error in the IR itself.
     Core(copilot_core::Error),
 
-    /// `drop` was applied to an expression reading an external variable.
+    /// `after` was applied to an expression reading an external variable.
     ///
-    /// `drop n` asks for a value `n` steps in the future. A stream can answer
+    /// `after n` asks for a value `n` steps in the future. A stream can answer
     /// as far as its buffer reaches, but an external variable's next sample
     /// does not exist yet — the environment has not produced it. Buffer the
     /// extern in a stream first if its history is what you need.
-    DropOnExtern(String),
+    AfterOnExtern(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Core(e) => e.fmt(f),
-            Error::DropOnExtern(name) => write!(
+            Error::AfterOnExtern(name) => write!(
                 f,
                 "cannot look ahead of external variable `{name}`: its future samples do not exist \
                  yet. Buffer it in a stream if you need its history."
@@ -38,7 +38,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Core(e) => Some(e),
-            Error::DropOnExtern(_) => None,
+            Error::AfterOnExtern(_) => None,
         }
     }
 }

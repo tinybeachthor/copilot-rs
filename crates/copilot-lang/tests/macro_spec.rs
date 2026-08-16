@@ -131,7 +131,7 @@ fn spec_equality_can_actually_fail() {
 fn a_self_referential_stream_desugars_to_the_same_spec() {
     let from_macro = copilot! {
         stream counter: u64 = [0] ++ counter + 1;
-        stream fib: u64 = [1, 1] ++ fib.drop(1) + fib;
+        stream fib: u64 = [1, 1] ++ fib.after(1) + fib;
         observe counter;
         observe fib;
     }
@@ -142,7 +142,7 @@ fn a_self_referential_stream_desugars_to_the_same_spec() {
     let fib = b.declare::<u64>(&[1, 1]);
     let (c, f) = (counter.stream(), fib.stream());
     counter.define(c + b.lit(1));
-    fib.define(f.drop(1) + f);
+    fib.define(f.after(1) + f);
     b.observe("counter", c);
     b.observe("fib", f);
 
@@ -210,9 +210,9 @@ fn properties_and_the_existential_form_are_expressible() {
 #[test]
 fn literals_are_lifted_only_in_operand_position() {
     let spec = copilot! {
-        stream fib: u64 = [1, 1] ++ fib.drop(1) + fib;
+        stream fib: u64 = [1, 1] ++ fib.after(1) + fib;
         // `drop(1)` takes a plain number; `> 100` takes a stream.
-        observe ahead = fib.drop(1);
+        observe ahead = fib.after(1);
         observe large = fib > 100;
     }
     .unwrap();
@@ -243,9 +243,9 @@ fn errors_reach_the_caller() {
     let result = copilot! {
         extern raw: u32;
         // Reading an external variable's future is not possible.
-        observe ahead = raw.drop(1);
+        observe ahead = raw.after(1);
     };
-    assert!(matches!(result, Err(copilot_lang::Error::DropOnExtern(_))));
+    assert!(matches!(result, Err(copilot_lang::Error::AfterOnExtern(_))));
 }
 
 /// What may refer to what, pinned so `docs/macro.md` states facts.

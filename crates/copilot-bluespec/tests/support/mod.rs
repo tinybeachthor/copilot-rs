@@ -137,7 +137,7 @@ pub fn counter() -> Spec {
 /// the right slot.
 pub fn fib() -> Spec {
     let b = Builder::new();
-    let fib = b.stream([1u64, 1], |s| s.drop(1) + s);
+    let fib = b.stream([1u64, 1], |s| s.after(1) + s);
     b.observe("fib", fib);
     b.finish().unwrap()
 }
@@ -149,8 +149,8 @@ pub fn window() -> Spec {
     let ticks = b.stream([0u32], |s| s + 1u32);
     let history = b.stream([0u32, 0, 0], |_| ticks);
     b.observe("now", history);
-    b.observe("one_ago", history.drop(1));
-    b.observe("two_ago", history.drop(2));
+    b.observe("one_ago", history.after(1));
+    b.observe("two_ago", history.after(2));
     b.finish().unwrap()
 }
 

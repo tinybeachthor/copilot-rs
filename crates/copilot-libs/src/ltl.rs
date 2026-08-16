@@ -1,7 +1,7 @@
 //! Bounded future-time linear temporal logic.
 //!
 //! A monitor cannot see the future, so these operators reach forward by reading
-//! *ahead in a buffer* — `s.drop(1)` is the value `s` will take next, which is
+//! *ahead in a buffer* — `s.after(1)` is the value `s` will take next, which is
 //! knowable only because `s` was buffered that deeply when it was defined.
 //!
 //! The practical consequence: every operator here needs its argument to carry
@@ -28,7 +28,7 @@ use copilot_lang::Stream;
 
 /// Does `s` hold at the next step?
 pub fn next<'a>(s: Stream<'a, bool>) -> Stream<'a, bool> {
-    s.drop(1)
+    s.after(1)
 }
 
 /// Does `s` hold at every step from now through `n` steps ahead?
@@ -49,7 +49,7 @@ pub fn until<'a>(n: u32, s0: Stream<'a, bool>, s1: Stream<'a, bool>) -> Stream<'
         return s1;
     }
     (0..n)
-        .map(|i| always(i, s0) & s1.drop(i + 1))
+        .map(|i| always(i, s0) & s1.after(i + 1))
         .fold(s1, |acc, term| acc | term)
 }
 
@@ -62,7 +62,7 @@ pub fn release<'a>(n: u32, s0: Stream<'a, bool>, s1: Stream<'a, bool>) -> Stream
         return s1;
     }
     let released = (0..n)
-        .map(|i| always(i, s1) & s0.drop(i))
+        .map(|i| always(i, s1) & s0.after(i))
         .reduce(|acc, term| acc | term)
         .expect("n is positive, so the window is non-empty");
     always(n, s1) | released

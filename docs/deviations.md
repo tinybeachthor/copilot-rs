@@ -473,7 +473,7 @@ Two things the macro translates, because Rust cannot express them directly:
   corresponding methods.
 - **Literals in operand position.** `celsius < 18.0` needs the `18.0` to be a stream too, so bare
   numeric and boolean literals are lifted where they are operands. They are left alone everywhere
-  else, which is what `counter.drop(1)` needs — `drop` is the one method in the API whose argument
+  else, which is what `counter.after(1)` needs — `after` is the one method in the API whose argument
   is a build-time quantity rather than a stream. String literals are never lifted, so a field or
   label name passes through.
 

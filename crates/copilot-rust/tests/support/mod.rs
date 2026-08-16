@@ -100,7 +100,7 @@ pub fn counter() -> Spec {
 /// find the right slot.
 pub fn fib() -> Spec {
     let b = Builder::new();
-    let fib = b.stream([1u64, 1], |s| s.drop(1) + s);
+    let fib = b.stream([1u64, 1], |s| s.after(1) + s);
     b.observe("fib", fib);
     b.finish().unwrap()
 }

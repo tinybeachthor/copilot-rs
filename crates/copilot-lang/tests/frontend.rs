@@ -7,7 +7,7 @@ use copilot_lang::{Builder, Error, args, cost, resources};
 fn a_spec_built_by_the_frontend_validates() {
     let b = Builder::new();
     let counter = b.stream([0u64], |s| s + 1u64);
-    let fib = b.stream([1u64, 1], |s| s.drop(1) + s);
+    let fib = b.stream([1u64, 1], |s| s.after(1) + s);
     let temperature = b.extern_::<f32>("temperature");
 
     b.observe("fib", fib);
@@ -83,11 +83,11 @@ mod drop_semantics {
     #[test]
     fn shifting_distributes_over_operators() {
         let b = Builder::new();
-        let x = b.stream([1u32, 2], |s| s.drop(1));
-        let y = b.stream([3u32, 4], |s| s.drop(1));
+        let x = b.stream([1u32, 2], |s| s.after(1));
+        let y = b.stream([3u32, 4], |s| s.after(1));
 
-        let shifted_sum = (x + y).drop(1);
-        let sum_of_shifted = x.drop(1) + y.drop(1);
+        let shifted_sum = (x + y).after(1);
+        let sum_of_shifted = x.after(1) + y.after(1);
         assert_eq!(shifted_sum.expr(), sum_of_shifted.expr());
 
         b.observe("shifted", shifted_sum);
@@ -98,8 +98,8 @@ mod drop_semantics {
     fn shifting_a_constant_leaves_it_alone() {
         let b = Builder::new();
         let one = b.lit(1u32);
-        assert_eq!(one.drop(3).expr(), one.expr());
-        let x = b.stream([0u32, 0], |s| s.drop(1));
+        assert_eq!(one.after(3).expr(), one.expr());
+        let x = b.stream([0u32, 0], |s| s.after(1));
         b.observe("x", x);
         b.finish().unwrap();
     }
@@ -108,7 +108,7 @@ mod drop_semantics {
     #[test]
     fn shifting_past_the_buffer_is_rejected() {
         let b = Builder::new();
-        let x = b.stream([1u32, 2], |s| s.drop(2));
+        let x = b.stream([1u32, 2], |s| s.after(2));
         b.observe("x", x);
         assert!(matches!(
             b.finish(),
@@ -125,8 +125,8 @@ mod drop_semantics {
     fn shifting_an_extern_is_rejected() {
         let b = Builder::new();
         let sensor = b.extern_::<i32>("sensor");
-        b.observe("ahead", sensor.drop(1));
-        assert!(matches!(b.finish(), Err(Error::DropOnExtern(name)) if name == "sensor"));
+        b.observe("ahead", sensor.after(1));
+        assert!(matches!(b.finish(), Err(Error::AfterOnExtern(name)) if name == "sensor"));
     }
 
     /// The error surfaces even when the extern is buried inside an expression
@@ -135,9 +135,9 @@ mod drop_semantics {
     fn shifting_an_extern_is_rejected_under_an_operator() {
         let b = Builder::new();
         let sensor = b.extern_::<i32>("sensor");
-        let stream = b.stream([0i32, 0], |s| s.drop(1));
-        b.observe("ahead", (sensor + stream).drop(1));
-        assert!(matches!(b.finish(), Err(Error::DropOnExtern(_))));
+        let stream = b.stream([0i32, 0], |s| s.after(1));
+        b.observe("ahead", (sensor + stream).after(1));
+        assert!(matches!(b.finish(), Err(Error::AfterOnExtern(_))));
     }
 }
 
@@ -186,10 +186,10 @@ mod rejects {
     fn the_first_error_is_the_one_reported() {
         let b = Builder::new();
         let sensor = b.extern_::<i32>("sensor");
-        b.observe("first", sensor.drop(1));
+        b.observe("first", sensor.after(1));
         let other = b.extern_::<i32>("other");
-        b.observe("second", other.drop(1));
-        assert!(matches!(b.finish(), Err(Error::DropOnExtern(name)) if name == "sensor"));
+        b.observe("second", other.after(1));
+        assert!(matches!(b.finish(), Err(Error::AfterOnExtern(name)) if name == "sensor"));
     }
 }
 
@@ -283,9 +283,9 @@ mod dropping_past_the_buffer {
 
         // `delayed` is [0, p0, p1, ..], so shifting it once recovers `p`
         // exactly — the same arena node, not merely an equal one.
-        assert_eq!(delayed.drop(1).expr(), raw.expr());
+        assert_eq!(delayed.after(1).expr(), raw.expr());
 
-        b.observe("out", delayed.drop(1));
+        b.observe("out", delayed.after(1));
         b.finish().unwrap();
     }
 
@@ -296,15 +296,15 @@ mod dropping_past_the_buffer {
         let delayed = b.append(&[0u32], raw);
 
         // One shift lands on `p` now; two would need its next sample.
-        b.observe("out", delayed.drop(2));
-        assert!(matches!(b.finish(), Err(Error::DropOnExtern(name)) if name == "p"));
+        b.observe("out", delayed.after(2));
+        assert!(matches!(b.finish(), Err(Error::AfterOnExtern(name)) if name == "p"));
     }
 
     /// A stream whose next value would be defined by its own next value.
     #[test]
     fn refuses_a_definition_that_would_need_itself() {
         let b = Builder::new();
-        let bad = b.stream([0u32], |s| s.drop(1));
+        let bad = b.stream([0u32], |s| s.after(1));
         b.observe("out", bad);
         assert!(b.finish().is_err());
     }

@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         raw.lt_val(180)
             .mux(b.lit(true), raw.gt_val(210).mux(b.lit(false), was))
     });
-    let fib = b.stream([1u32, 1], |s| s.drop(1) + s);
+    let fib = b.stream([1u32, 1], |s| s.after(1) + s);
     let history = b.stream([[0u32; 4]], |h| h.update(fib % 4u32, fib));
 
     b.observe("heating", heating);

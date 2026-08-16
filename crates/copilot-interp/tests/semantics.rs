@@ -40,7 +40,7 @@ fn a_counter_counts() {
 #[test]
 fn fibonacci_needs_two_buffered_values() {
     let b = Builder::new();
-    let fib = b.stream([1u64, 1], |s| s.drop(1) + s);
+    let fib = b.stream([1u64, 1], |s| s.after(1) + s);
     b.observe("fib", fib);
     let spec = b.finish().unwrap();
 
@@ -442,8 +442,8 @@ fn reading_ahead_past_the_buffer_evaluates_the_definition() {
     let b = Builder::new();
     let counter = b.stream([10u32], |c| c + 1u32);
     b.observe("now", counter);
-    b.observe("next", counter.drop(1));
-    b.observe("later", counter.drop(3));
+    b.observe("next", counter.after(1));
+    b.observe("later", counter.after(3));
     let spec = b.finish().unwrap();
 
     let mut monitor = Monitor::new(&spec).unwrap();

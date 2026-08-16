@@ -1,7 +1,7 @@
 //! Folds over a bounded window of a stream's future.
 //!
 //! Upstream's `nfoldl1` and friends fold over `take n s`, the list of a
-//! stream's successive tails. Here that is `s.drop(0) .. s.drop(n - 1)`, and
+//! stream's successive tails. Here that is `s.after(0) .. s.after(n - 1)`, and
 //! the fold happens while the specification is built, so what reaches the IR is
 //! a fixed expression with no loop in it.
 
@@ -9,14 +9,14 @@ use copilot_lang::Stream;
 use copilot_lang::Typed;
 use copilot_lang::classes::*;
 
-/// The first `n` tails of `s`: `[s, drop 1 s, .., drop (n-1) s]`.
+/// The first `n` tails of `s`: `[s, after 1 s, .., after (n-1) s]`.
 ///
 /// Reading ahead only works as far as a stream's buffer reaches, so every
 /// element beyond the first needs `s` to have been buffered accordingly. A
 /// window past the end of the buffer is reported by
 /// [`Builder::finish`](copilot_lang::Builder::finish) rather than here.
 pub fn window<T: Typed>(n: u32, s: Stream<'_, T>) -> Vec<Stream<'_, T>> {
-    (0..n).map(|i| s.drop(i)).collect()
+    (0..n).map(|i| s.after(i)).collect()
 }
 
 /// Folds `f` over the first `n` tails of `s`, left to right.

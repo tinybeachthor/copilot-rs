@@ -283,7 +283,7 @@ pub fn expand(block: SpecBlock) -> TokenStream {
 ///   because comparing two streams yields a *stream* of booleans rather than a
 ///   `bool`. They become the method calls that do.
 /// - **Literals in operand position.** `celsius < 18.0` needs the `18.0` to be
-///   a stream too. Lifting only in operand position leaves `s.drop(1)` and
+///   a stream too. Lifting only in operand position leaves `s.after(1)` and
 ///   `history.index(i)` alone, where a bare number is what is wanted.
 struct Rewriter {
     builder: Ident,
@@ -398,12 +398,12 @@ fn liftable(literal: &syn::ExprLit) -> bool {
 
 /// Whether a method's arguments are plain values rather than streams.
 ///
-/// `drop` is the exception in the whole API: its argument is how far to shift,
-/// a quantity fixed when the specification is built, not a value that varies
-/// over time. Everything else — `mux`, the comparisons, `index`, the shifts —
-/// takes streams, so a literal there is lifted.
+/// `after` is the exception in the whole API: its argument is how far to
+/// shift, a quantity fixed when the specification is built, not a value that
+/// varies over time. Everything else — `mux`, the comparisons, `index`, the
+/// shifts — takes streams, so a literal there is lifted.
 fn takes_plain_arguments(method: &Ident) -> bool {
-    method == "drop"
+    method == "after"
 }
 
 /// Parses a `copilot! { .. }` block, including the outer braces when the macro
