@@ -123,7 +123,8 @@ compiled type.
 
 ## 6. Array index policy is explicit
 
-**Implemented** (M1 in `copilot_core::IndexPolicy` and the interpreter; M2 in the Rust backend).
+**Implemented** (M1 in `copilot_core::IndexPolicy` and the interpreter; M2 in the Rust backend; M7
+in the Bluespec backend).
 
 `Op2::Index` takes a runtime `Word32`, so an out-of-range index is possible. Upstream's C backend
 emits an unchecked subscript, which is undefined behaviour.
@@ -138,6 +139,22 @@ copilot-rs makes the policy explicit, defaulting to `Wrap`:
 
 Every engine must be configured with the same policy, or the interpreter stops being a valid oracle
 for the generated code — which is why `Monitor::with_policy` takes it explicitly.
+
+Bluespec adds two wrinkles, one in the user's favour and one against.
+
+Under `Assume`, a subscript that is a compile-time constant is checked during elaboration, so `bsc`
+refuses a specification that visibly breaks its obligation instead of compiling it into something
+unspecified. The interpreter refuses the same specification as `IndexOutOfRange`; the two agree even
+where neither produces a trace.
+
+Against: on hardware, `Wrap` costs more than it looks. `i % N` is one instruction on a processor and,
+for an `N` that is not a power of two, a divider on the critical path in a circuit. There is no exact
+escape the way there is for the ring-buffer index — where `p + i` is known to be below `2N`, so a
+conditional subtraction does the same job, which is what generated Bluespec emits. A runtime
+subscript has no such bound. Users who care about the critical path have two options, both
+specification-level: give the array a power-of-two length, or take on the obligation with `Assume`.
+The Rust backend is unaffected, and the default stays `Wrap` there and here, because a monitor that
+silently reads the wrong element is worse than one that is a few gates deeper.
 
 ## 7. Struct fields are named, not selected by function
 
@@ -479,3 +496,120 @@ stream pong: bool = [true]  ++ ping;
 
 work. `define` consumes the `Pending`, so a stream cannot be given two bodies, and one left declared
 but never defined is reported by `Builder::finish`.
+
+## 26. The Bluespec backend refuses floating point
+
+**Implemented** (M7, `copilot_bluespec::Error::UnsupportedType`).
+
+Upstream's Bluespec backend carries `Float` and `Double` through to Bluespec's `FloatingPoint`
+library. copilot-rs rejects a specification that mentions either, at generation time, naming the
+type.
+
+Bluespec's floats are a soft-float *library*, not a primitive type, and the gap between that and
+what this IR requires is not one of cost:
+
+- there are no transcendental functions at all, so `sqrt`, `exp`, and the rest have nothing to lower
+  to;
+- `FloatingPoint` values cannot be compared or divided during elaboration — `bsc` reports
+  "Unordered comparison of type `FloatingPoint`" and stops — so even `x < 4.0` fails to build.
+
+A backend that accepted float specifications would therefore accept them only as far as the
+generator, and hand the user a `bsc` error about a library they never imported. Refusing at the
+boundary says which type is the problem, in the terms the specification is written in. It also keeps
+this backend's agreement with the interpreter total: every specification it compiles, it compiles to
+something that simulates identically, which is the property `crates/copilot-bluespec/tests/bluesim.rs`
+checks.
+
+The same reasoning as M5's refusal of transcendentals in the Kani corpus, applied one type earlier.
+Integer specifications are unaffected, and a fixed-point thermostat is the corpus entry standing in
+for the float-valued heater.
+
+## 27. In hardware the compute and commit phases cannot be swapped
+
+**Implemented by the target** (M7).
+
+Generated Rust has to be careful about phases 3 and 4: computing each stream's next value and
+committing it are separate loops precisely so that no stream can read another's *new* value.
+Merging them is the classic bug, and the Kani harness exists to rule it out.
+
+Bluespec gets it from the semantics of a rule. Every register the step rule reads holds the value it
+had at the clock edge, and every write takes effect at the next one, so the entire rule body — the
+subexpression wires, the trigger calls, the commits — sees one consistent snapshot no matter what
+order it is written in. There is no ordering to get wrong.
+
+That is a genuine simplification rather than a claim taken on trust: the negative test
+`a_stream_reading_a_committed_value_is_caught` builds the swap by hand, by rewriting one commit to
+store another stream's next value, and asserts that bluesim then disagrees with the interpreter. The
+bug is expressible; the code generator simply has no way to introduce it.
+
+What Bluespec does *not* give away is the ring buffer. `a_frozen_ring_buffer_index_is_caught` freezes
+the rotating index and asserts the disagreement, which is the other half of what the Rust backend's
+differential test covers.
+
+## 28. Generated Bluespec is one rule, and it always fires
+
+**Implemented** (M7).
+
+The monitor is a module taking an interface and returning `Empty`, with a single rule guarded by
+`when True`. A step is therefore exactly one clock cycle, whatever the data — the hardware form of
+the constant-time claim, and stronger than the software one, since it is a property `bsc`'s own
+scheduler reports rather than one inferred from the absence of loops.
+
+Two consequences worth naming:
+
+- **The module is not a synthesis boundary.** A module with an interface argument cannot be compiled
+  separately (`bsc` says so in as many words), so `mkMonitor` is elaborated into whatever module
+  instantiates it. That is the same shape upstream uses, and it is what lets an external variable be
+  an `ActionValue` method rather than a port whose timing the monitor would have to negotiate.
+- **A buffer read is a mux, not a modulo.** The invariant is `b[(p + i) % n]`, but `p` and `i` are
+  both below `n`, so generated code emits one conditional subtraction instead. On a processor that
+  is a micro-optimisation; on hardware it is the difference between a wire and a divider.
+
+## 29. The Bluespec backend reaches verification layers 1 and 2, not 3
+
+**Implemented by omission** (M7).
+
+Layer 3 is Kani over Rust. There is no CBMC for Bluespec, so a generated monitor gets no
+bisimulation proof — and "verifiable" must not spread to this backend by association with the other
+one.
+
+What it does get:
+
+- **Layer 1 in full**, and by simulation rather than by inspection: `bsc` compiles every corpus
+  monitor, bluesim runs it against a generated testbench, and the printed events must be the
+  interpreter's. Two negative tests assert the failure — a frozen ring-buffer index and a stream
+  reading a committed value — so the comparison is known to have teeth.
+- **Layer 2 for free**, because k-induction proves things about a `Spec`. A property discharged by
+  `copilot-theorem` holds of the specification, not of any lowering of it, so it transfers to every
+  backend without being re-proved.
+
+What is missing is the step in between: nothing proves that the emitted Bluespec *implements* the
+`Spec` for all inputs, only that it agrees with the interpreter on the traces tested. For the Rust
+backend that gap is closed by `copilot-verifier`; here it is covered by testing alone.
+
+This is the one respect in which the second backend is weaker than the first, and it is not a
+temporary state of the tooling — a bisimulation proof for Bluespec would need a model checker for
+Bluespec, which is a different project.
+
+## 30. The Bluespec footprint is stated, not verified
+
+**Implemented** (M7).
+
+`copilot_core::resources` reports a Rust monitor's state size, and
+`every_monitor_occupies_exactly_the_reported_footprint` checks it against `size_of::<Monitor>()`.
+That is what makes M2's constant-memory claim falsifiable.
+
+There is no equivalent here, for two reasons. `repr(C)` does not apply — Bluespec's derived `Bits`
+instances pack, so a `Bool` costs one bit rather than one byte, and `resources`' answer would be the
+wrong number reported precisely. And there is nothing to compare against: `bsc` reports area, but not
+in a form anything parses, so an automated check would mean scraping a human-readable report.
+
+So the generated monitor reports what it can support: the bits its buffers hold and the number of
+registers holding them, both computed from the specification — and it says, in the file, that this is
+not the synthesised area and that nothing checks it against one. The figure is still worth printing,
+because it is exact about the thing it describes and cannot drift silently; it is simply a weaker
+claim than M2's, and generated code that implied otherwise would be the defect.
+
+`generated_source_states_its_state_without_overclaiming` pins both halves — the count and the
+disclaimer — so an edit cannot quietly drop the second and leave the first reading as if it had been
+verified.

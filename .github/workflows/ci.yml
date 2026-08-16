@@ -163,3 +163,55 @@ jobs:
         run: cargo test -p copilot-verifier --test kani --locked
         env:
           COPILOT_REQUIRE_KANI: 1
+
+  bluespec:
+    name: generated monitor in bluesim
+    # Pinned to the distribution the pinned `bsc` release is built for. The
+    # compiler ships as a tarball linked against that release's system
+    # libraries, so tracking `ubuntu-latest` here would break on an upgrade
+    # nothing in this repository asked for.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Pinned rather than "latest", for the same reason the solvers are: a
+      # silently changing compiler would make a failure hard to attribute.
+      - name: Install bsc
+        env:
+          BSC_VERSION: "2024.07"
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tcl-dev
+          asset="bsc-${BSC_VERSION}-ubuntu-24.04.tar.gz"
+          curl -fsSL -o bsc.tar.gz \
+            "https://github.com/B-Lang-org/bsc/releases/download/${BSC_VERSION}/${asset}"
+          sudo mkdir -p /opt/bsc
+          sudo tar -xzf bsc.tar.gz -C /opt/bsc --strip-components=1
+          echo "/opt/bsc/bin" >> "$GITHUB_PATH"
+
+      - name: Compiler version
+        run: bsc -v | head -1
+
+      # `bsc` compiles every corpus monitor, bluesim runs it, and the trace has
+      # to be the one the interpreter produces. COPILOT_REQUIRE_BSC makes a
+      # missing toolchain a failure rather than a silent skip, for the same
+      # reason COPILOT_REQUIRE_SOLVER does.
+      - name: Simulation
+        run: cargo test -p copilot-bluespec --locked
+        env:
+          COPILOT_REQUIRE_BSC: 1
+
+      # The suite above drives the generator from inside the test harness. This
+      # is the path a user takes: emit the packages to a directory and point the
+      # toolchain at them.
+      - name: Emit and simulate a monitor
+        run: |
+          set -euo pipefail
+          cargo run -q -p copilot-bluespec --example emit_packages --locked -- "$RUNNER_TEMP/monitor"
+          cd "$RUNNER_TEMP/monitor"
+          bsc -sim -u -g mkMonitorSim MonitorSim.bs
+          bsc -sim -e mkMonitorSim -o sim.out mkMonitorSim.ba
+          ./sim.out

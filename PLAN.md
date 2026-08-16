@@ -7,7 +7,7 @@ hard-realtime embedded systems (used by NASA Langley for UAS flight monitoring).
 mutually-recursive infinite streams; the compiler emits a monitor that runs in **constant time and
 constant memory**, and the spec itself is **verifiable** by SMT.
 
-**Status: M0–M6 complete.** See the milestone table below. This document is the plan; decisions taken
+**Status: M0–M7 complete.** See the milestone table below. This document is the plan; decisions taken
 along the way — and the reasons for them — are recorded in [docs/deviations.md](docs/deviations.md),
 which is the living record. Where a sketch below disagrees with the code, the code is right.
 
@@ -72,7 +72,7 @@ copilot-rs/
   README.md                  # what the project is, and what enforces each objective
   LICENSE                    # BSD-3-Clause, matching upstream Copilot
   CHANGELOG.md               # (M9, not yet created)
-  .github/workflows/ci.yml   # lints, tests, MSRV, bare-metal build, Kani proofs
+  .github/workflows/ci.yml   # lints, tests, MSRV, bare-metal build, Kani proofs, bluesim
   crates/
     copilot-core/            # IR: types, values, ops, arena, Spec, typechecker, analyses
     copilot-lang/            # builder frontend: Stream<T>, operators, externs, triggers
@@ -80,7 +80,7 @@ copilot-rs/
     copilot-interp/          # constant-memory reference evaluator
     copilot-gen/             # random well-typed Spec generation, for the differential suites
     copilot-rust/            # no_std Rust codegen backend
-    copilot-bluespec/        # Bluespec (.bs) codegen backend            (M7, not yet created)
+    copilot-bluespec/        # Bluespec (.bs) codegen backend + bluesim testbench generator
     copilot-libs/            # PTLTL, LTL, MTL, clocks, voting, state machines
     copilot-theorem/         # SMT-LIB2 lowering + k-induction driver (z3 / cvc5)
     copilot-verifier/        # Kani bisimulation harness generation
@@ -333,6 +333,42 @@ does. The testbench takes its trace as a `Vector` of samples indexed by a cycle 
 observers and fired triggers in a format the harness parses. Gate on `bsc` with `COPILOT_REQUIRE_BSC`
 in CI, per the Risks entry.
 
+#### As built (M7)
+
+`Settings { name, output_directory, index_policy }`. Three packages — `<Name>Types` (structs, when
+there are any), `<Name>Ifc`, `<Name>` — plus `testbench()`, which emits a fourth driving the monitor
+over a recorded trace and printing one line per event. Buffers are one `Reg` per slot, gathered into
+a `Vector n (Reg t)` only where the read index is dynamic. Answering the six points above in order,
+because two of them changed what shipped:
+
+1. **The phases did collapse, and the obligation did move.** Everything is in one rule, so phases 3
+   and 4 are inseparable and the swap is not expressible — `deviations.md` §27. That is asserted
+   rather than assumed: `a_stream_reading_a_committed_value_is_caught` builds the swap by hand and
+   requires bluesim to disagree with the interpreter, which shows the bug is expressible in Bluespec
+   and that the *generator* has no way to introduce it. Trigger order within the rule follows spec
+   order, and bluesim confirms it, since the comparison is order-sensitive.
+2. **The footprint claim was weakened, as this section demanded.** `bsc` has no machine-readable
+   area report to compare against, so the emitted header no longer prints a byte count as if it were
+   checked: it reports the register bits the buffers hold and says explicitly that this is the
+   specification's own state and not the synthesised area. `deviations.md` §30. This is the one place
+   where the second backend's constant-memory story is weaker than M2's, and it now says so in the
+   generated file rather than only here.
+3. **The `%` escape was taken for index advance**, exactly as prescribed: `idx + 1 >= N ? 0 : idx + 1`
+   for the advance and one conditional subtraction for a `drop i` read. A runtime `Index` under
+   `Wrap` still emits `%`, which is a divider for a non-power-of-two length — recorded as a
+   user-visible cost in `deviations.md` §6, with `Assume` and power-of-two lengths as the escapes.
+4. **Floats are refused, and the reason turned out to be larger than transcendentals.** The blocker
+   is not only that `FloatingPoint#(e,m)` lacks `libm`: `bsc` fails during *elaboration* on `x < 4.0`
+   ("Unordered comparison of type `FloatingPoint`") and on float division. So a float spec would not
+   merely lose precision, it would not build. The error names the type and the restriction;
+   `deviations.md` §26. Still a gap against upstream 4.8, not a design win.
+5. **Layers 1 and 2 only**, as predicted, and now written down — `deviations.md` §29.
+6. **Testing followed the sketch**, with one departure: each specification gets its own `bsc`
+   invocation rather than being batched. Eleven specs cost about 24 seconds, which is cheap enough
+   that batching would trade a real diagnostic — the failing spec's own directory, left on disk — for
+   nothing. The suite also checks both non-default index policies and that `bsc` emits no warnings on
+   generated code.
+
 ---
 
 ## `copilot-libs` (M3)
@@ -448,7 +484,7 @@ upstream 4.8 (2026-08-12):
 | `copilot-interpreter` | `copilot-interp` | done |
 | `copilot-theorem` | `copilot-theorem` | done (M4). Upstream drives What4; we emit SMT-LIB2 down a pipe |
 | `copilot-verifier` | `copilot-verifier` | done (M5). Upstream is Crucible over LLVM against the C99 output; ours is CBMC-via-Kani against the Rust output. Same bisimulation argument, different machinery |
-| `copilot-bluespec` | `copilot-bluespec` | **M7**, and behind: upstream supports floats, we will not at first |
+| `copilot-bluespec` | `copilot-bluespec` | done (M7), and behind in one respect: upstream supports floats, we refuse them — `deviations.md` §26 |
 | `copilot-c99` | — | deliberate, `deviations.md` §8 |
 | `copilot-prettyprinter` | — | **gap.** Nothing here prints a `Spec` |
 | `copilot` | `copilot` | done, though the facade re-exports less; see Risks |
@@ -471,8 +507,8 @@ both rewrite what the user wrote. M8.
 | M4 | **done** | `copilot-theorem` SMT + k-induction | Proves the bounded-counter property; produces a replayable counterexample on a false one |
 | M5 | **done** | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on the corpus (fib, lag, an integer thermostat, struct and array specs — floats refused, see below); the phase-3/4 swap and a corrupted commit are caught |
 | M6 | **done** | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
-| M7 | next | `copilot-bluespec` | `bsc` compiles the integer corpus; bluesim events match the interpreter; golden `.bs` checked in; floats refused by name, not miscompiled |
-| M8 | after M7 | `Spec` pretty-printer, closing the last parity gap | Every corpus spec round-trips to text a reader can check against the source; the `copilot!` desugaring is inspectable; counterexamples print as specs, not model dumps |
+| M7 | **done** | `copilot-bluespec` | `bsc` compiles the integer corpus; bluesim events match the interpreter; golden `.bs` checked in; floats refused by name, not miscompiled |
+| M8 | next | `Spec` pretty-printer, closing the last parity gap | Every corpus spec round-trips to text a reader can check against the source; the `copilot!` desugaring is inspectable; counterexamples print as specs, not model dumps |
 | M9 | last | First publish | Names settled, `CHANGELOG.md`, the semver surface written down (see below), docs.rs green |
 
 M0–M2 is the load-bearing core; M3–M8 are independently shippable and can be reordered.
@@ -546,7 +582,7 @@ minimum.
 These are the real commands, as the crates are actually laid out.
 
 ```bash
-cargo test --workspace                       # everything; 178 tests
+cargo test --workspace                       # everything; 196 tests
 cargo clippy --workspace --all-targets       # clean, no allows in generated code
 cargo run -p copilot --example heater        # footprint + per-step cost, then a driven trace
 cargo run -p copilot-rust --example emit_crate -- DIR   # writes a generated monitor crate to DIR
@@ -564,8 +600,17 @@ cargo test -p copilot-theorem                # layer 2: SMT k-induction; needs z
                                              #   encoding.rs (encoding vs interpreter, both solvers)
 cargo test -p copilot-verifier --test kani   # layer 3: Kani bisimulation; needs cargo-kani
                                              #   also runs under `cargo test --workspace`
-# M7, when a Bluespec toolchain is present:
-# bsc -sim -p crates/copilot-bluespec/out ...
+cargo test -p copilot-bluespec               # M7: bsc + bluesim vs the interpreter; needs bsc
+                                             #   bluesim.rs (simulated trace vs interpreter),
+                                             #   golden.rs (checked-in .bs, no toolchain needed)
+```
+
+To look at what the Bluespec backend emits, or to run it by hand:
+
+```bash
+cargo run -p copilot-bluespec --example emit_packages -- /tmp/monitor
+cd /tmp/monitor && bsc -sim -u -g mkMonitorSim MonitorSim.bs \
+  && bsc -sim -e mkMonitorSim -o sim.out mkMonitorSim.ba && ./sim.out
 ```
 
 The negative tests are the point of the suites, because they are what prove the harness has teeth —
@@ -579,10 +624,13 @@ each is a real, passing test that asserts the *failure*:
   at the same step (`refutes_a_false_property_with_a_replayable_trace`).
 - `copilot-core`: a drifted cached type or a mis-ordered arena → `typecheck` catches it
   (`check::corruption`).
+- `copilot-bluespec`: freeze a monitor's rotating index, or make one stream read another's committed
+  value → bluesim disagrees with the interpreter (`a_frozen_ring_buffer_index_is_caught`,
+  `a_stream_reading_a_committed_value_is_caught`).
 
 ### What CI enforces
 
-[.github/workflows/ci.yml](.github/workflows/ci.yml) — five jobs, on every push to `main` and every
+[.github/workflows/ci.yml](.github/workflows/ci.yml) — six jobs, on every push to `main` and every
 pull request, with a newer push cancelling the older run. `RUSTFLAGS: -D warnings` applies to this
 workspace only, since Cargo caps lints for dependencies. Every cargo invocation is `--locked`, so a
 run checks the committed lockfile rather than whatever resolved that morning.
@@ -594,6 +642,7 @@ run checks the committed lockfile rather than whatever resolved that morning.
 | `msrv` | `cargo check --workspace --all-targets` on the toolchain named by `rust-version` | `rust-version = 1.88`: let-chains under edition 2024, used in `copilot-core`, `copilot-rust` and `copilot-theorem`. The job reads the version out of the manifest rather than repeating it, so the two cannot drift. |
 | `embedded` | `emit_crate` → `cargo build --target thumbv7em-none-eabihf` | The constant-memory objective, checked on a machine that has no `std` at all rather than on a host that merely went unused; see below. |
 | `kani` | `cargo test -p copilot-verifier --test kani`, `COPILOT_REQUIRE_KANI=1` | Layer 3. The `test` job skips the proofs; they run here, with a Kani install of their own, so the rest of the suite reports without waiting on CBMC. |
+| `bluespec` | `cargo test -p copilot-bluespec` with a pinned `bsc`, `COPILOT_REQUIRE_BSC=1`, then `emit_packages` → `bsc -sim` → bluesim | Layer 1 for the second backend. The `test` job has no toolchain, so the simulation skips there; here it runs, and the second step exercises the path a user takes rather than the one the harness takes. |
 
 Three decisions in there are load-bearing, and each is the sort of thing that quietly rots:
 
@@ -607,7 +656,7 @@ this project that is the worst available way to be wrong.
 against a `libm` stub, which shows the code needs nothing from `std`. The `embedded` job builds it
 for a machine that *has* no `std`. The first can pass on a target where the second fails.
 
-**Solvers are pinned, Kani is not cached.** cvc5 is fixed at 1.3.4 rather than tracking latest,
+**Solvers and `bsc` are pinned, Kani is not cached.** cvc5 is fixed at 1.3.4 and `bsc` at 2024.07 rather than tracking latest,
 because a silently changing solver makes a failure hard to attribute; bumping it is a visible commit.
 Kani is installed from scratch every run: `cargo kani setup` writes a bundle whose toolchain is a
 symlink into `~/.rustup`, which the job reinstalls, so caching `~/.kani` restores a dangling link and
@@ -621,10 +670,11 @@ the failure names nothing that suggests the cache. It takes about fifteen second
   open. Settle on a prefix (`copilot-rs-*` with short `[lib] name`s) as part of M9.
 - **Kani scale** — large specs may blow up CBMC. The current harness proves the whole step at once,
   which is ample for the corpus; per-stream-group splitting is the escape hatch if a real spec bites.
-- **Bluespec toolchain in CI** — *M7, open.* `bsc` is open source but heavy; gate its tests behind a
-  toolchain check the way the solver and Kani suites already gate — which means a
-  `COPILOT_REQUIRE_BSC` alongside the gate, and its own job, or M7 ships with a suite that is green
-  because it never ran.
+- **Bluespec area is unverified** — *open.* The generated monitor reports the register bits the
+  specification's buffers hold, which is a statement about the `Spec` rather than about what `bsc`
+  synthesised. M2's footprint claim is checked against `size_of::<Monitor>()`; this one is checked
+  against nothing. Closing it means parsing `bsc`'s area output, which is not machine-readable
+  today — so the claim is stated narrowly instead. `deviations.md` §30.
 - **Facade surface** — the `copilot` facade re-exports the language crates (core, lang, interp) and
   the `copilot!` macro, not the backends or verifier. Those are used as their own crates. Revisit
   only if a "batteries included" story needs them — and settle it before M9, since narrowing a
@@ -639,3 +689,6 @@ Resolved since the plan was written:
   `Proof::is_conclusive` is false whenever one applied (M4).
 - **Struct/array frontend ergonomics** — `#[derive(CopilotStruct)]` shipped in M2 with its field
   accessors, and structs and arrays are in the differential, SMT, and Kani corpora.
+- **Bluespec toolchain in CI** — `bsc` is gated behind a toolchain check the way the solver and Kani
+  suites are, with `COPILOT_REQUIRE_BSC` turning a missing toolchain into a failure in the job that
+  installs one (M7). The golden tests need no toolchain, so codegen churn stays visible everywhere.

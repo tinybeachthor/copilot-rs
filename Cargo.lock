@@ -45,6 +45,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "copilot-bluespec"
+version = "0.1.0"
+dependencies = [
+ "copilot-core",
+ "copilot-interp",
+ "copilot-lang",
+ "copilot-libs",
+]
+
+[[package]]
 name = "copilot-core"
 version = "0.1.0"
 
