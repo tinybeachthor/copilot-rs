@@ -81,6 +81,19 @@ impl<'a, T: Typed> Stream<'a, T> {
         }
     }
 
+    /// This stream's current value — `drop(0)` under a name that doesn't
+    /// suggest a shift.
+    ///
+    /// ```
+    /// # use copilot_lang::Builder;
+    /// let b = Builder::new();
+    /// let fib = b.stream([1u64, 1], |s| s.drop(1) + s.read());
+    /// # b.finish().unwrap();
+    /// ```
+    pub fn read(self) -> Stream<'a, T> {
+        self.drop(0)
+    }
+
     /// Annotates the expression with a name, for generated code to carry as a
     /// comment. Semantically the identity.
     pub fn label(self, name: &str) -> Stream<'a, T> {
