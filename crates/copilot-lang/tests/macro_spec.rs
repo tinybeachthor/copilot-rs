@@ -70,6 +70,33 @@ fn the_heater_desugars_to_the_same_spec() {
     );
 }
 
+/// The milestone's other criterion (M8): the macro's invisible desugaring —
+/// `let` bindings erased, structure hash-consed — is inspectable rather than
+/// only provably equal to the builder's. `docs/macro.md` describes the
+/// translation in prose; this checks the claim against what the printer
+/// actually shows for the exact spec printed at the top of that document.
+#[test]
+fn the_desugared_heater_prints_legibly() {
+    let text = heater_macro().to_string();
+
+    assert!(text.contains("extern temperature: Float;"));
+    // `celsius` is a `let` in the source and is read from four places (the
+    // stream, both triggers, and the observer) after desugaring; the printer
+    // must show it once, not re-derive `temperature * 0.5 - 30.0` at each
+    // site.
+    let lets = text.matches("temperature * 0.5").count();
+    assert_eq!(
+        lets, 1,
+        "a shared subexpression must be named once, not re-derived at each use:\n{text}"
+    );
+    assert!(text.contains("observe heating = "));
+    assert!(text.contains("trigger heat_on("));
+    assert!(text.contains("trigger heat_off("));
+    // The stream reads its own past value through `drop`, exactly the form
+    // `docs/macro.md` and the core IR documentation use to describe it.
+    assert!(text.contains("drop 0 s0"));
+}
+
 /// Equality above is only meaningful if it can fail. A specification that
 /// differs in one constant must compare unequal, or the assertion is vacuous.
 #[test]

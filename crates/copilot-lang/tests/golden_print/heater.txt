@@ -1,0 +1,13 @@
+extern temperature: Float;
+
+let celsius = (temperature * 0.5) - 30.0;
+let t7 = celsius < 18.0;
+let t9 = celsius > 21.0;
+
+stream s0: Bool = [false] ++ t7.mux(true, (t9.mux(false, drop 0 s0)));
+
+observe celsius = celsius;
+observe heating = drop 0 s0;
+
+trigger heat_on(celsius) when t7 && (!drop 0 s0);
+trigger heat_off(celsius) when t9 && drop 0 s0;
