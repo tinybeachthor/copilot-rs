@@ -165,6 +165,15 @@ transition expression depends on another's within a step. Phase 3 has no
 internal ordering constraint, and a backend may evaluate streams in any order or
 in parallel. This is why the IR needs no dependency sort over streams.
 
+How literally a backend has to *implement* the separation depends on what it
+emits. `copilot-rust` computes into temporaries and writes them back afterwards,
+and getting that wrong is the bug M5's proof rules out. `copilot-bluespec` emits
+one rule whose registers change at the clock edge, so the whole body reads one
+consistent snapshot and the two phases cannot be merged even deliberately; there
+the separation is a property of the target rather than of the generated text.
+Both realise the same step relation, which is why the same interpreter is an
+oracle for both.
+
 ### The commit is well founded
 
 Phase 4 overwrites `b_s[p_s]`, which by (INV) held `⟦s⟧(t)` — the value for the

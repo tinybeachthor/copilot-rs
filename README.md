@@ -85,7 +85,9 @@ below rules out.
 **Layer 1 — differential testing.** Every specification is run through a constant-memory reference
 interpreter and through the generated Rust, and the observer values and trigger call sequences must
 agree. Inputs come from a hand-picked corpus, from `proptest`, and from a random *well-typed*
-specification generator that compiles each monitor with `rustc` and runs it.
+specification generator that compiles each monitor with `rustc` and runs it. The Bluespec backend is
+held to the same standard the only way a hardware description can be: `bsc` compiles each monitor,
+bluesim runs it against a generated testbench, and the trace it prints must be the interpreter's.
 
 **Layer 2 — SMT k-induction.** `property` claims are lowered to a transition system in SMT-LIB2 and
 discharged with Z3 or cvc5 over a pipe, so nothing links against a solver. Integers become bitvectors,
@@ -120,6 +122,7 @@ Kani to find the counterexample.
 | `copilot-macro` | `copilot!` and `#[derive(CopilotStruct)]` |
 | `copilot-interp` | Constant-memory reference interpreter |
 | `copilot-rust` | `no_std` Rust code generator |
+| `copilot-bluespec` | Bluespec Classic code generator, and a bluesim testbench generator |
 | `copilot-libs` | PTLTL, LTL, MTL, clocks, majority voting, state machines |
 | `copilot-theorem` | SMT-LIB2 lowering and the k-induction driver |
 | `copilot-verifier` | Kani bisimulation harness generation |
@@ -149,16 +152,23 @@ step   celsius  heating  triggers
    3     15.0°       on
 ```
 
-The whole suite is 178 tests:
+The whole suite is 196 tests:
 
 ```bash
 cargo test --workspace
 ```
 
 The optional layers skip cleanly when their tool is absent, so this is green on a bare checkout.
-To actually run them, install Z3 or cvc5 for layer 2 and `cargo-kani` for layer 3; CI sets
-`COPILOT_REQUIRE_SOLVER` and `COPILOT_REQUIRE_KANI` so that a missing tool there is a failure rather
-than a silent skip. A verification suite that skips is indistinguishable from one that passes.
+To actually run them, install Z3 or cvc5 for layer 2, `cargo-kani` for layer 3, and `bsc` for the
+Bluespec simulation; CI sets `COPILOT_REQUIRE_SOLVER`, `COPILOT_REQUIRE_KANI`, and
+`COPILOT_REQUIRE_BSC` so that a missing tool there is a failure rather than a silent skip. A
+verification suite that skips is indistinguishable from one that passes.
+
+For hardware, the Bluespec backend emits packages a `bsc` toolchain compiles and simulates:
+
+```bash
+cargo run -p copilot-bluespec --example emit_packages -- /tmp/monitor
+```
 
 ## Documentation
 
@@ -179,16 +189,18 @@ Fully recorded in [docs/deviations.md](docs/deviations.md); the ones that change
   it makes the interpreter, the generated code, and the SMT encoding able to agree.
 - **Equality is scalar-only.** Comparing whole arrays or structs compiles to a fully unrolled
   element-wise walk, which the bisimulation proof would have to carry.
-- **No C99 backend.** The `no_std` Rust backend is the flagship, with Bluespec planned.
+- **No C99 backend.** The `no_std` Rust backend is the flagship; Bluespec covers hardware, and
+  refuses floating point rather than lowering it to a soft-float library that cannot compare or
+  divide.
 - **Sharing is structural.** An arena with hash-consing replaces upstream's `data-reify` /
   `StableName` observation, which is `unsafePerformIO`-based and heuristic. This removes the single
   unsafest part of upstream — reusing a handle *is* sharing, deterministically.
 
 ## Status
 
-M0–M6 are complete: the IR, the builder frontend, the interpreter, the `no_std` backend, the
-libraries, the SMT prover, the Kani harnesses, and the `copilot!` macro. M7, a Bluespec backend,
-is the remaining milestone. See [PLAN.md](PLAN.md).
+M0–M7 are complete: the IR, the builder frontend, the interpreter, the `no_std` backend, the
+libraries, the SMT prover, the Kani harnesses, the `copilot!` macro, and the Bluespec backend —
+every milestone the plan set out. See [PLAN.md](PLAN.md).
 
 ## License
 
