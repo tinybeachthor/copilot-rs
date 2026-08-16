@@ -245,6 +245,52 @@ impl Proof {
     pub fn is_conclusive(&self) -> bool {
         induct::is_conclusive(&self.outcome, &self.caveats)
     }
+
+    /// A human-readable rendering of the result: the property's own text, not
+    /// its name alone, and — for a refutation — each step of the
+    /// counterexample's external inputs by name and value.
+    ///
+    /// `Display` for [`Outcome::Invalid`] says only "refuted by a trace of N
+    /// step(s)", which is a fact about the trace's length, not about what was
+    /// claimed or what happened. `Value` already knows how to print itself,
+    /// and [`copilot_core::format_expr`] (M8) now knows how to print an
+    /// expression, so a counterexample no longer has to be read as a bare
+    /// list of [`Value`]s beside a property name it does not explain.
+    pub fn describe(&self, spec: &Spec) -> String {
+        let expr = spec
+            .properties
+            .iter()
+            .find(|p| p.name == self.property)
+            .map(|p| p.prop.expr());
+
+        let mut out = match expr {
+            Some(expr) => format!(
+                "{}: {}\n",
+                self.property,
+                copilot_core::format_expr(spec, expr)
+            ),
+            // Only reachable if `self` did not come from proving `spec`.
+            None => format!("{}: <no such property in this spec>\n", self.property),
+        };
+
+        match &self.outcome {
+            Outcome::Valid if self.caveats.is_empty() => out.push_str("  proved\n"),
+            Outcome::Valid => out.push_str("  holds under an approximation\n"),
+            Outcome::Invalid(counterexample) => {
+                for (step, values) in counterexample.steps.iter().enumerate() {
+                    out.push_str(&format!("  step {step}:\n"));
+                    for (name, value) in &values.inputs {
+                        out.push_str(&format!("    {name} = {value}\n"));
+                    }
+                }
+            }
+            Outcome::Unknown(reason) => out.push_str(&format!("  undecided — {reason}\n")),
+        }
+        for caveat in &self.caveats {
+            out.push_str(&format!("  caveat: {caveat}\n"));
+        }
+        out
+    }
 }
 
 impl fmt::Display for Proof {

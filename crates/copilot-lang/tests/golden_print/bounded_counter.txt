@@ -1,0 +1,6 @@
+stream s0: Word8 = [0] ++ (drop 0 s0 + 1) % 10;
+
+observe counter = drop 0 s0;
+
+property stays_below_ten = drop 0 s0 < 10;
+property exists reaches_nine = drop 0 s0 == 9;

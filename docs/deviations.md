@@ -613,3 +613,55 @@ claim than M2's, and generated code that implied otherwise would be the defect.
 `generated_source_states_its_state_without_overclaiming` pins both halves — the count and the
 disclaimer — so an edit cannot quietly drop the second and leave the first reading as if it had been
 verified.
+
+---
+
+## 31. The pretty-printer is a module in `copilot-core`, and it does not parse
+
+**Implemented** (M8).
+
+Upstream keeps `Copilot.PrettyPrint` in its own package, `copilot-prettyprinter`, because it wants the
+`pretty` library. copilot-rs has no such reason: every crate here already depends on `copilot-core`,
+and `copilot-core` is deliberately dependency-free. So the printer is
+`crates/copilot-core/src/print.rs`: a hand-written `Display` for `Spec`, plus `format_expr` for one
+expression on its own, not a tenth crate.
+
+The harder decision is what the text looks like, because two things pull against each other. The
+arena is hash-consed, so the same subexpression can be reachable from a stream, an observer, and two
+trigger arguments at once — printing it four times would hide the sharing `copilot_core::cost` charges
+for once, and would make the text's size stop tracking the arena's. So a node used more than once is
+named — `let t7 = ...;` — and printed once; a [`Node::Label`] is named after itself rather than a
+synthetic number, since a user chose that name on purpose; a [`Node::Local`] is always named,
+regardless of use count, because it exists only because a frontend asked for a binding to appear —
+`crates/copilot-rust/tests/support/mod.rs::locals` builds exactly this shape by hand to prove a
+generator handles a binding nobody reads, and the printer now shows it as a `let` too, unused or not.
+
+Round-tripping through a parser was explicitly not attempted, even though the text looks close enough
+to `copilot!`'s surface syntax to tempt it. That would be a second frontend to keep in sync with the
+builder and the macro, and the plan already turned down a second frontend once (`copilot!` desugars to
+the builder rather than parsing to a fresh IR). Nothing here reads the text back; `format_expr` and
+`Display for Spec` only write.
+
+One consequence worth naming because it looks like an omission: operand parenthesization does not
+track precedence. Every inlined compound operand is wrapped in parentheses whether or not the
+wrapping is necessary — `(drop 0 s0 + 1) * 2`, but also the less necessary `t7.mux(true,
+(t9.mux(false, drop 0 s0)))`. A precedence table would read slightly better; it would also be another
+thing to get wrong in a format nothing checks by parsing it back. Unambiguous-but-verbose was chosen
+over pretty-but-fallible.
+
+## 32. Counterexamples print against the property's own text
+
+**Implemented** (M8).
+
+`copilot-theorem`'s `Outcome::Invalid` carries a `Counterexample` — external inputs only, replayed
+through the interpreter rather than trusted from the solver, so a counterexample is corroborated by a
+second engine before it is shown to anyone. Before this milestone, the only way to read one was
+`Proof`'s `Display`, which says "refuted by a trace of N step(s)" — a fact about the trace's length,
+not about what was claimed or what the trace's inputs were.
+
+`Proof::describe(&self, spec: &Spec)` prints the property's own expression via
+`copilot_core::format_expr` next to each step's inputs by declared name and [`Value`]'s own `Display`.
+Nothing here is a raw solver model: the inputs already went through `sexpr::decode` before reaching
+`Counterexample`, and `format_expr` is the same printer §31 added for `copilot-core`, not a second
+one. `Display for Proof` is unchanged — it is the one-line summary a test failure prints by default —
+and `describe` is the expanded form a person reaches for when the one-liner is not enough.

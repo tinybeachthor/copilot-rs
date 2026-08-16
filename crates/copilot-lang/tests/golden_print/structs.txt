@@ -1,0 +1,5 @@
+extern sensor: Reading;
+
+stream s0: Reading = [Reading { altitude: 0.0, valid: false }] ++ (sensor.valid).mux(sensor, drop 0 s0);
+
+observe altitude = drop 0 s0.altitude;

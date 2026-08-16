@@ -7,7 +7,7 @@ hard-realtime embedded systems (used by NASA Langley for UAS flight monitoring).
 mutually-recursive infinite streams; the compiler emits a monitor that runs in **constant time and
 constant memory**, and the spec itself is **verifiable** by SMT.
 
-**Status: M0–M7 complete.** See the milestone table below. This document is the plan; decisions taken
+**Status: M0–M8 complete.** See the milestone table below. This document is the plan; decisions taken
 along the way — and the reasons for them — are recorded in [docs/deviations.md](docs/deviations.md),
 which is the living record. Where a sketch below disagrees with the code, the code is right.
 
@@ -486,15 +486,15 @@ upstream 4.8 (2026-08-12):
 | `copilot-verifier` | `copilot-verifier` | done (M5). Upstream is Crucible over LLVM against the C99 output; ours is CBMC-via-Kani against the Rust output. Same bisimulation argument, different machinery |
 | `copilot-bluespec` | `copilot-bluespec` | done (M7), and behind in one respect: upstream supports floats, we refuse them — `deviations.md` §26 |
 | `copilot-c99` | — | deliberate, `deviations.md` §8 |
-| `copilot-prettyprinter` | — | **gap.** Nothing here prints a `Spec` |
+| `copilot-prettyprinter` | `copilot-core::print` | done (M8), as a module rather than a package — `deviations.md` §31 |
 | `copilot` | `copilot` | done, though the facade re-exports less; see Risks |
 | — | `copilot-gen` | ours: random well-typed specs, which upstream has no equivalent of |
 
-Two rows are open, and only one is a surprise. `copilot-prettyprinter` exposes a single module,
-`Copilot.PrettyPrint`, and it was never in this plan — the plan went straight from an IR to three
-backends without noticing that a user who writes a spec has no way to *look* at one. That matters
-more here than upstream, because `copilot!` desugars invisibly and `Local` erasure and hash-consing
-both rewrite what the user wrote. M8.
+One row is a deliberate, permanent gap (`copilot-c99`, `deviations.md` §8); every other package either
+has a counterpart here or, as of M8, prints one. `copilot-prettyprinter` was never in this plan — it
+went straight from an IR to three backends without noticing that a user who writes a spec has no way
+to *look* at one. That mattered more here than upstream, because `copilot!` desugars invisibly and
+hash-consing rewrites what the user wrote; M8 closed it.
 
 ## Milestones
 
@@ -508,8 +508,8 @@ both rewrite what the user wrote. M8.
 | M5 | **done** | `copilot-verifier` Kani harnesses + `docs/bisimulation.md` | `cargo kani` green on the corpus (fib, lag, an integer thermostat, struct and array specs — floats refused, see below); the phase-3/4 swap and a corrupted commit are caught |
 | M6 | **done** | `copilot!` proc-macro sugar over the builder | Heater spec expressible in macro form, desugars to identical `Spec` |
 | M7 | **done** | `copilot-bluespec` | `bsc` compiles the integer corpus; bluesim events match the interpreter; golden `.bs` checked in; floats refused by name, not miscompiled |
-| M8 | next | `Spec` pretty-printer, closing the last parity gap | Every corpus spec round-trips to text a reader can check against the source; the `copilot!` desugaring is inspectable; counterexamples print as specs, not model dumps |
-| M9 | last | First publish | Names settled, `CHANGELOG.md`, the semver surface written down (see below), docs.rs green |
+| M8 | **done** | `Spec` pretty-printer, closing the last parity gap | Every corpus spec round-trips to text a reader can check against the source; the `copilot!` desugaring is inspectable; counterexamples print as specs, not model dumps |
+| M9 | next | First publish | Names settled, `CHANGELOG.md`, the semver surface written down (see below), docs.rs green |
 
 M0–M2 is the load-bearing core; M3–M8 are independently shippable and can be reordered.
 
@@ -546,6 +546,42 @@ The format should follow the source, not the arena: `Drop` back to `drop n s`, s
 named rather than duplicated, and struct and array literals as written. Round-tripping to a parser is
 explicitly *not* a goal — that is a second frontend to keep in sync, and the `copilot!` macro already
 occupies that niche.
+
+#### As built (M8)
+
+A `Display` impl for `Spec` and a `format_expr(spec, id)` for one expression on its own, both in
+`crates/copilot-core/src/print.rs` — a module, not a tenth crate, exactly as sketched. The three
+motivating callers all got something concrete:
+
+1. **Reading what `copilot!` produced.** `crates/copilot-lang/tests/macro_spec.rs` gained
+   `the_desugared_heater_prints_legibly`, which prints the macro's own `heater_macro()` and asserts
+   that the shared `celsius` binding appears once rather than being re-derived at each of its four
+   uses. `docs/macro.md`'s "erased" claim about `Local` was prose only before this; it is now
+   something a test reads off the printed text.
+2. **Counterexamples.** `copilot_theorem::Proof::describe(&self, spec)` prints the failing property's
+   own text via `format_expr`, then each step of the counterexample's external inputs by declared
+   name and `Value`'s own `Display` — `deviations.md` §32. `Display for Proof` is untouched; `describe`
+   is the expanded form.
+3. **Review.** Golden `.txt` files under `crates/copilot-lang/tests/golden_print/` (`heater`,
+   `bounded_counter`, `structs`), checked in the same way as the `.rs` and `.bs` golden corpora and
+   rewritten with `UPDATE_GOLDEN=1`.
+
+Two decisions the sketch above did not settle, resolved while building it — both in `deviations.md`
+§31:
+
+- **What gets named.** Hash-consing makes sharing structural, so a node used more than once — by
+  actual reference count, not by guesswork — is named `t{id}` and printed once. A `Node::Label` is
+  named after itself instead, since a user chose that name; a `Node::Local` is always named,
+  regardless of use count, which is what makes the `crates/copilot-rust/tests/support/mod.rs::locals`
+  corpus entry (a reachable binding nobody reads) print sensibly rather than needing a special case.
+- **Precedence is not tracked.** Every inlined compound operand is parenthesized whether or not the
+  parentheses are load-bearing. Slightly more verbose than a precedence table; never ambiguous, which
+  is what matters for a format nothing parses back.
+
+Tests live where the printer's callers live, not only in `copilot-core`: unit tests for the naming
+rules in `print.rs` itself, golden and content tests in `copilot-lang` (builder specs and the macro's
+desugaring), and hand-built-`Proof` tests in `copilot-theorem/tests/describe.rs` that need no solver,
+since the rendering has nothing to do with how the `Proof` was produced.
 
 ### M9 — publishing
 
