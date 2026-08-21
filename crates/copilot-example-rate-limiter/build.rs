@@ -3,50 +3,42 @@
 //! / `Monitor` and drive it directly — the spec below is the only place the
 //! rate-limiting logic is written down.
 
-use copilot_lang::{Builder, args};
+use copilot_lang::copilot;
 use copilot_rust::{Settings, generate};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-/// Bucket capacity, in requests.
-const CAPACITY: f32 = 20.0;
-/// Refill rate, in tokens per millisecond — 2 requests/second sustained.
-const REFILL_PER_MS: f32 = 2.0 / 1000.0;
-/// Tokens one request costs.
-const COST: f32 = 1.0;
-
 /// A token bucket: refill by elapsed time, then admit or reject one request.
 ///
-/// `tokens` denotes the bucket level *before* this request, so the guard and
-/// the transition can both read it — that is what [`Builder::declare`] is
-/// for. Refill and consumption are folded into a single committed value:
-/// `mux` picks between "consume a token" and "stay put" so the rejection
-/// path costs the same as the admission path, which is what keeps a step's
-/// timing independent of whether it fires.
+/// Burst of 20 requests, refilling at 2/s sustained, one token per request.
+///
+/// `tokens` denotes the bucket level *before* this request. Every `copilot!`
+/// stream is declared before any body is built, so `tokens` is readable both
+/// in its own transition (`next`, below) and in the trigger guard — the same
+/// thing [`Builder::declare`](copilot_lang::Builder::declare) gives directly.
+/// Symmetrically, a stream body may use a `let` that appears further down —
+/// `tokens`'s body is `next`, defined last — because every binding is built
+/// before any stream body (`docs/macro.md`, "Scoping").
 fn spec() -> Result<copilot_lang::Spec, Box<dyn std::error::Error>> {
-    let b = Builder::new();
+    Ok(copilot! {
+        extern elapsed_ms: f32;
 
-    let elapsed_ms = b.extern_::<f32>("elapsed_ms");
+        stream tokens: f32 = [20.0] ++ next;
 
-    let pending = b.declare(&[CAPACITY]);
-    let tokens = pending.stream();
+        let refilled_raw = tokens + elapsed_ms * 0.002;
+        let over_capacity = refilled_raw > 20.0;
+        let refilled = over_capacity.mux(20.0, refilled_raw);
+        let allowed = refilled >= 1.0;
+        let next = allowed.mux(refilled - 1.0, refilled);
 
-    let refilled_raw = tokens + elapsed_ms * REFILL_PER_MS;
-    let over_capacity = refilled_raw.gt_val(CAPACITY);
-    let refilled = over_capacity.mux(b.lit(CAPACITY), refilled_raw);
-    let allowed = refilled.ge_val(COST);
-    let next = allowed.mux(refilled - COST, refilled);
-    pending.define(next);
+        observe remaining = next;
+        trigger reject(refilled) when !allowed;
 
-    b.observe("remaining", next);
-    b.trigger("reject", !allowed, args![refilled]);
-
-    // The bucket can never leave [0, CAPACITY] — provable by
-    // `cargo test -p copilot-theorem`, not checked at build time here.
-    b.property_forall("bounded", tokens.ge_val(0.0) & tokens.le_val(CAPACITY));
-
-    Ok(b.finish()?)
+        // The bucket can never leave [0, 20] — provable by
+        // `cargo test -p copilot-theorem`, not checked at build time here.
+        property bounded = tokens >= 0.0 && tokens <= 20.0;
+    }?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
